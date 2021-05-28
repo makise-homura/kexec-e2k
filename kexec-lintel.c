@@ -52,19 +52,19 @@ void free_lintel(void)
 
 void load_lintel(const char *fname)
 {
-    FILE *f = fopen(fname,"r");
+    FILE *f = fopen(fname,"r"); size_t realsize;
     if (f == NULL) cancel(1, "Can't open %s: %s\n", fname, strerror(errno));
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); cancel(2, "Can't seek lintel file: %s\n", strerror(errno)); }
-    if ((lintel.image_size = ftell(f)) == -1) { fclose(f); cancel(3, "Can't get file position of lintel file: %s\n", strerror(errno)); }
+    if ((realsize = ftell(f)) == -1) { fclose(f); cancel(3, "Can't get file position of lintel file: %s\n", strerror(errno)); }
     rewind(f);
-    lintel.image_size += alignment ; lintel.image_size -= lintel.image_size % alignment;
+    lintel.image_size = realsize + alignment; lintel.image_size -= lintel.image_size % alignment;
 
     if (posix_memalign(&lintel.image, alignment, lintel.image_size)) { fclose(f); cancel(4, "Can't allocate %ld bytes for lintel file\n", lintel.image_size); }
     atexit(free_lintel);
-    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file: %s\n", lintel.image_size, strerror(errno)); }
+    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file: %s\n", realsize, strerror(errno)); }
     fclose(f);
 
-    printf("Loaded lintel file: %s, %ld bytes at address %p (aligned at 0x%x), ioctl struct at %p\n", fname, lintel.image_size, lintel.image, alignment, &lintel);
+    printf("Loaded lintel file: %s, %ld bytes at address %p (%ld bytes aligned at 0x%x), ioctl struct at %p\n", fname, realsize, lintel.image, lintel.image_size, alignment, &lintel);
 }
 
 int check_syslog(const char *marker)
