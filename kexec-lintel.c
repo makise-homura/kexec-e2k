@@ -72,7 +72,7 @@ int check_syslog(const char *marker)
     char buf[1001];
     memset(buf, 0, 1001);
     int len = klogctl(3, buf, 1000);
-    return !strcmp(buf + len - strlen(marker), marker);
+    return strstr(buf, marker) != NULL;
 }
 
 void remount_filesystems()
