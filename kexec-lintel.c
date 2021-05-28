@@ -57,6 +57,7 @@ void load_lintel(const char *fname)
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); cancel(2, "Can't seek lintel file: %s\n", strerror(errno)); }
     if ((lintel.image_size = ftell(f)) == -1) { fclose(f); cancel(3, "Can't get file position of lintel file: %s\n", strerror(errno)); }
     rewind(f);
+    lintel.image_size += alignment ; lintel.image_size -= lintel.image_size % alignment;
 
     if (posix_memalign(&lintel.image, alignment, lintel.image_size)) { fclose(f); cancel(4, "Can't allocate %ld bytes for lintel file\n", lintel.image_size); }
     atexit(free_lintel);
