@@ -61,7 +61,7 @@ void load_lintel(const char *fname)
 
     if (posix_memalign(&lintel.image, alignment, lintel.image_size)) { fclose(f); cancel(4, "Can't allocate %ld bytes for lintel file\n", lintel.image_size); }
     atexit(free_lintel);
-    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file: %s\n", realsize, strerror(errno)); }
+    if (fread(lintel.image, realsize, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file: %s\n", realsize, strerror(errno)); }
     fclose(f);
 
     printf("Loaded lintel file: %s, %ld bytes at address %p (%ld bytes aligned at 0x%x), ioctl struct at %p\n", fname, realsize, lintel.image, lintel.image_size, alignment, &lintel);
