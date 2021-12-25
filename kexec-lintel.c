@@ -8,6 +8,7 @@
 #include <utmp.h>
 #include <utmpx.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/klog.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
@@ -24,6 +25,27 @@ void cancel(int num, const char *fmt, ...)
     vprintf(fmt, ap);
     va_end(ap);
     exit(num);
+}
+
+void check_iommu(void)
+{
+    /* Current kernels don't allow lintel to detect devices if IOMMU is enabled. */
+    struct stat st;
+    if (stat("/sys/class/iommu", &st) != 0) cancel(61, "Can't stat() /sys/class/iommu directory (probably you have very old kernel): %s\n", strerror(errno));
+    if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(62, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
+}
+
+void check_fbdriver(void)
+{
+    /* Current kernels don't allow lintel to run VGA BIOS from video adapter ROM if native driver is activated. */
+    char buf[4097];
+    memset(buf, 0, 4097);
+    FILE *f = fopen("/proc/fb","r");
+    if (f == NULL) cancel(63, "Can't open /proc/fb to get current framebuffer: %s\n", strerror(errno));
+    if (fread(buf, 1, 4096, f) < 1) { fclose(f); cancel(64, "Can't read /proc/fb, file might be empty\n"); }
+    fclose(f);
+    if(strchr(buf, '\n') != strrchr(buf, '\n')) cancel(65, "Too many framebuffers in /proc/fb, probably you have native driver loaded, which is not supported\n");
+    if(strcmp("0 VGA16 VGA\n", buf)) cancel(66, "Framebuffer 0 should be VGA16 VGA, but it is wrong: %s", buf);
 }
 
 void check_runlevel(void)
@@ -169,6 +191,8 @@ int open_kexec()
 int main(int argc, char *argv[])
 {
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk");
+    check_iommu();
+    check_fbdriver();
     check_runlevel();
     void *pbuf;
     load_lintel(fname);
