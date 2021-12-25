@@ -42,7 +42,7 @@ void check_fbdriver(void)
     memset(buf, 0, 4097);
     FILE *f = fopen("/proc/fb","r");
     if (f == NULL) cancel(63, "Can't open /proc/fb to get current framebuffer: %s\n", strerror(errno));
-    if (fread(buf, 1, 4096, f) < 1) { fclose(f); cancel(64, "Can't read /proc/fb, file might be empty\n"); }
+    if (fread(buf, 1, 4096, f) < 1) { fclose(f); cancel(64, "Empty /proc/fb, you might have no video adapter, running lintel is pointless in this case\n"); }
     fclose(f);
     if(strchr(buf, '\n') != strrchr(buf, '\n')) cancel(65, "Too many framebuffers in /proc/fb, probably you have native driver loaded, which is not supported\n");
     if(strcmp("0 VGA16 VGA\n", buf)) cancel(66, "Framebuffer 0 should be VGA16 VGA, but it is wrong: %s", buf);
