@@ -28,6 +28,7 @@ void cancel(int num, const char *fmt, ...)
 
 void check_runlevel(void)
 {
+    /* For the sake of not rebooting fully running system, restrict to runlevel 1 only. We suppose nothing that may leave garbage in filesystem is running there. */
     int runlevel = -1;
     struct utmpx *ut;
 
