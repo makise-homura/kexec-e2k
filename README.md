@@ -6,6 +6,11 @@ cd build
 ninja
 ```
 
+## Build requirements
+
+* `<limits.h>` should have `PATH_MAX` defined.
+* `libpci` should be available to meson.
+
 # Usage
 
 ```
