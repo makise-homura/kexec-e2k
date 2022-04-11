@@ -14,7 +14,7 @@
 #include <sys/ioctl.h>
 #include <linux/types.h>
 #include <linux/fb.h>
-#include <pci.h>
+#include <pci/pci.h>
 #include <asm/kexec.h>
 
 const size_t alignment = 4096;
@@ -262,7 +262,7 @@ void read_lintel(FILE *f, size_t realsize)
     if (posix_memalign(&lintel.image, alignment, aligned_size)) { fclose(f); cancel(4, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
     atexit(free_lintel);
     if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
-    printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%x), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
+    printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
 }
 
 int bcd_check_files(FILE *f)
@@ -295,7 +295,7 @@ void load_bcd_lintel(FILE *f, int files)
             uint32_t checksum;
         } file;
         if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(11, "Can't read file %d header of BCD file, file might be truncated\n"); }
-        printf("BCD file %d: /%d, offset %d blocks, size %d blocks, init_size %d blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
+        printf("BCD file %d: /%d, offset %ld blocks, size %ld blocks, init_size %ld blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
 
         if (file.tag == 0) /* 0 is the tag of Lintel binary */
         {
@@ -394,7 +394,6 @@ int main(int argc, char *argv[])
     check_iommu();
     check_runlevel();
 
-    void *pbuf;
     load_lintel(fname);
 
     printf("Resetting video driver...\n");
