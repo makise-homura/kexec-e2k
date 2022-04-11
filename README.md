@@ -19,6 +19,7 @@ kexec-lintel [ [--tty <N>] <path> | -h | --help ]
 # Limitations
 
 * You should be in runlevel 1 to run this.
+* You should have IOMMU disabled.
 * You should have the same lintel BCD image written on some disk.
 * No other disks should contain lintel.
 * All Lintel hadrware limitations (e.g. SATA controller 0, etc.) apply.
