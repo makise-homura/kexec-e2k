@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <utmp.h>
 #include <utmpx.h>
@@ -12,10 +13,12 @@
 #include <sys/klog.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
-typedef __u64 u64;
+#include <linux/fb.h>
+#include <pci.h>
 #include <asm/kexec.h>
 
 const size_t alignment = 4096;
+
 struct lintel_reboot_param lintel __attribute__((aligned(alignment)));
 
 void cancel(int num, const char *fmt, ...)
@@ -35,17 +38,195 @@ void check_iommu(void)
     if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(62, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
 }
 
-void check_fbdriver(void)
+int con2fbmap(int tty)
 {
-    /* Current kernels don't allow lintel to run VGA BIOS from video adapter ROM if native driver is activated. */
-    char buf[4097];
-    memset(buf, 0, 4097);
-    FILE *f = fopen("/proc/fb","r");
-    if (f == NULL) cancel(63, "Can't open /proc/fb to get current framebuffer: %s\n", strerror(errno));
-    if (fread(buf, 1, 4096, f) < 1) { fclose(f); cancel(64, "Empty /proc/fb, you might have no video adapter, running lintel is pointless in this case\n"); }
-    fclose(f);
-    if(strchr(buf, '\n') != strrchr(buf, '\n')) cancel(65, "Too many framebuffers in /proc/fb, probably you have native driver loaded, which is not supported\n");
-    if(strcmp("0 VGA16 VGA\n", buf)) cancel(66, "Framebuffer 0 should be VGA16 VGA, but it is wrong: %s", buf);
+    /* See con2fbmap by Michael J. Hammel: https://gitlab.com/pibox/con2fbmap */
+    const char *fbpath = "/dev/fb0";  /* any frame buffer will do */
+
+    int fd;
+    struct fb_con2fbmap map;
+    map.console = tty;
+
+    if ((fd = open(fbpath, O_RDONLY)) == -1)
+    {
+        if (errno == ENOENT) return -1;
+        cancel(67, "Can't open framebuffer device %s: %s\n", fbpath, strerror(errno));
+    }
+    if (ioctl(fd, FBIOGET_CON2FBMAP, &map))
+    {
+        close(fd);
+        cancel(68, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno));
+    }
+    close(fd);
+    return map.framebuffer;
+}
+
+char *quick_basename(char *arg)
+{
+    /* We could have used libgen.h or string.h implementation, but it's unreliable which one we get. So we implement it on our own. */
+    int l = strlen(arg);
+    if (l == 0) return NULL;
+    if (l > 0 && arg[l] == '/') arg[l] = '\0';
+
+    char *parg = strrchr(arg, '/');
+    if (parg == NULL) return arg;
+
+    if (*++parg == '\0') return NULL;
+    return parg;
+}
+
+char *quick_dirname(char *arg)
+{
+    int l = strlen(arg);
+    if (l == 0) return NULL;
+    if (l > 0 && arg[l] == '/') arg[l] = '\0';
+
+    char *parg = strrchr(arg, '/');
+    if (parg == NULL) return NULL;
+    *parg = '\0';
+    return arg;
+}
+
+void path_snprintf(char *buf, const char *name, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int sz = vsnprintf(buf, PATH_MAX, fmt, ap);
+    va_end(ap);
+    if(sz >= PATH_MAX) cancel(69, "Path to %s is greater than %d bytes", name, PATH_MAX - 1);
+}
+
+void path_readlink(const char *link, char *buf)
+{
+    ssize_t ls = readlink(link, buf, PATH_MAX);
+    if (ls == -1) cancel(69, "Can't read %s: %s\n", link, strerror(errno));
+    if (ls == PATH_MAX) cancel(70, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
+}
+
+void read_sysfs(const char *file, char **buf)
+{
+    int fd;
+    off_t size = 4096;
+    struct stat st;
+    if(stat(file, &st) == -1) cancel(71, "Can't stat %s: %s\n", file, strerror(errno));
+    if(st.st_size > 0) size = st.st_size;
+
+    if ((fd = open(file, O_RDONLY)) == -1)
+    {
+        cancel(72, "Can't open %s for reading: %s\n", file, strerror(errno));
+    }
+
+    if((*buf = malloc(size)) == NULL)
+    {
+        close(fd);
+        cancel(73, "Can't allocate %d bytes to read %s\n", size, file);
+    }
+    memset(buf, 0, size);
+
+    if (read(fd, *buf, size) < 1)
+    {
+        close(fd);
+        free(*buf);
+        cancel(74, "Can't read %s: %s\n", file, strerror(errno));
+    }
+    close(fd);
+}
+
+void write_sysfs(const char *file, const char *buf)
+{
+    int fd;
+
+    if ((fd = open(file, O_WRONLY)) == -1)
+    {
+        cancel(72, "Can't open %s for writing: %s\n", file, strerror(errno));
+    }
+
+    if (write(fd, buf, strlen(buf)) < 1)
+    {
+        close(fd);
+        cancel(74, "Can't write %s: %s\n", file, strerror(errno));
+    }
+    close(fd);
+}
+
+void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
+{
+    char *s, *endp;
+    errno = 0;
+
+    s = strtok(pciid, ":.");
+    if (s == NULL) cancel(75, "Can't recognize domain id for the bridge.\n");
+    *domain = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(76, "Malformed domain id for the bridge.\n");
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(77, "Can't recognize bus id for the bridge.\n");
+    *bus = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(78, "Malformed bus id for the bridge.\n");
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(79, "Can't recognize dev id for the bridge.\n");
+    *dev = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(80, "Malformed dev id for the bridge.\n");
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(81, "Can't recognize func id for the bridge.\n");
+    *func = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(82, "Malformed func id for the bridge.\n");
+}
+
+void bridge_reset(char *pciid)
+{
+    int domain, bus, dev, func;
+    parse_pci_id(pciid, &domain, &bus, &dev, &func);
+
+    /* libpci seems to have error handling undocumented; so we skip it here. */
+    struct pci_access *pacc = pci_alloc();
+    pci_init(pacc);
+    struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
+
+    uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
+    pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
+    usleep(10000);
+    pci_write_word(pdev, 0x3E, bridge_ctl);
+    usleep(500000);
+
+    pci_free_dev(pdev);
+    pci_cleanup(pacc);
+}
+
+void reset_fbdriver(int tty)
+{
+    /* Current kernels require specific adapter reset sequence to be performed before kexec. */
+    int fb = con2fbmap(tty);
+    if (fb == -1)
+    {
+        printf("No /dev/fb0 available; you might have no video adapter, running lintel is pointless in this case, but we'll try to start it anyway.\n");
+        return;
+    }
+
+    char fbdev[PATH_MAX];
+    char pcilnk[PATH_MAX];
+    char *pciid;
+    char pcidev[PATH_MAX];
+    char pciabsdev[PATH_MAX];
+    char *pcibridge;
+    char pciremove[PATH_MAX];
+
+    printf("Active framebuffer device is %d.\n", fb);
+    path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
+    path_readlink(fbdev, pcilnk);
+    pciid = quick_basename(pcilnk);
+    path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
+    path_readlink(pcidev, pciabsdev);
+    pcibridge = quick_basename(quick_dirname(pciabsdev));
+    path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
+
+    printf("Removing device %s.\n", pciid);
+    write_sysfs(pciremove, "1\n");
+
+    printf("Performing bridge reset of %s.\n", pcibridge);
+    bridge_reset(pcibridge);
 }
 
 void check_runlevel(void)
@@ -168,13 +349,31 @@ void remount_filesystems()
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
-const char *check_args(int argc, char *argv[], const char *def)
+const char *check_args(int argc, char *argv[], const char *def, int *tty)
 {
     if (argc > 1)
     {
         if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))
         {
-            cancel(0, "Usage: %s {<path>|-h|--help}\n\t<path> is path to lintel file (default is %s)\n\t-h | --help: Print this help\n", argv[0], def);
+            cancel(0, "Usage: %s [ [--tty <N>] <path> | -h | --help ]\n\t<N> active tty number (default is %d)\n\t<path> is path to lintel file (default is %s)\n\t-h | --help: Print this help\n", argv[0], *tty, def);
+        }
+        if (!strcmp(argv[1], "--tty"))
+        {
+            if (argc >= 3)
+            {
+                char *endp;
+                errno = 0;
+                *tty = strtol(argv[2], &endp, 0);
+                if (errno || *endp)
+                {
+                    cancel(17, "Malformed tty number %s (run %s --help for usage)", argv[2], argv[0]);
+                }
+                return (argc == 3) ? def : argv[3];
+            }
+            else
+            {
+                cancel(15, "You must specify tty number (run %s --help for usage)", argv[0]);
+            }
         }
         return argv[1];
     }
@@ -190,12 +389,16 @@ int open_kexec()
 
 int main(int argc, char *argv[])
 {
-    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk");
+    int tty = 1;
+    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk", &tty);
     check_iommu();
-    check_fbdriver();
     check_runlevel();
+
     void *pbuf;
     load_lintel(fname);
+
+    printf("Resetting video driver...\n");
+    reset_fbdriver(tty);
 
     printf("Flushing filesystems...\n");
     sync();

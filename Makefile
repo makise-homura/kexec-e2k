@@ -5,7 +5,7 @@ PROG = kexec-lintel
 all: $(PROG)
 
 $(PROG): $(PROG).c
-	gcc -o $@ $^
+	gcc -I /usr/include/pci -lpci -o $@ $^
 
 clean:
 	rm -f $(PROG)
