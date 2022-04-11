@@ -12,9 +12,9 @@ ninja
 kexec-lintel [ [--tty <N>] <path> | -h | --help ]
 ```
 
-`<N>`: active tty number (default is `1`)
-`<path>`: path to lintel file (default is `/opt/mcst/lintel/bin/lintel_e8c.disk`)
-`-h` or `--help`: Print help
+* `<N>`: active tty number (default is `1`)
+* `<path>`: path to lintel file (default is `/opt/mcst/lintel/bin/lintel_e8c.disk`)
+* `-h` or `--help`: Print help
 
 # Limitations
 
