@@ -298,6 +298,7 @@ void reset_fbdriver(int tty)
     char *pcibridge;
     char pciremove[PATH_MAX];
     char driverlnk[PATH_MAX];
+    char drivermod[PATH_MAX];
     char *modname;
     char vtconbind[PATH_MAX];
 
@@ -310,7 +311,8 @@ void reset_fbdriver(int tty)
     pcibridge = quick_basename(quick_dirname(pciabsdev));
     path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
     path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
-    modname = quick_basename(driverlnk);
+    path_readlink(driverlnk, drivermod);
+    modname = quick_basename(drivermod);
     path_snprintf(vtconbind, "Virtual console bind command pseudofile", "/sys/class/vtconsole/vtcon%d/bind", vtcon);
 
     printf("Unbinding virtual console vtcon%d.\n", vtcon);
