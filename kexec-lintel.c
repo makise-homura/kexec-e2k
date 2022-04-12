@@ -391,13 +391,19 @@ int main(int argc, char *argv[])
 {
     int tty = 1;
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk", &tty);
-    check_iommu();
+
+    #ifndef NO_IOMMU_CHECK
+        check_iommu();
+    #endif
+
     check_runlevel();
 
     load_lintel(fname);
 
-    printf("Resetting video driver...\n");
-    reset_fbdriver(tty);
+    #ifndef NO_FBRESET
+        printf("Resetting video driver...\n");
+        reset_fbdriver(tty);
+    #endif
 
     printf("Flushing filesystems...\n");
     sync();

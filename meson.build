@@ -1,3 +1,7 @@
 project('kexec-lintel', 'c')
 meson.get_compiler('c').has_header_symbol('limits.h', 'PATH_MAX', required : true)
-executable('kexec-lintel', 'kexec-lintel.c', dependencies: dependency('libpci'))
+libpci = dependency('libpci')
+executable('kexec-lintel', 'kexec-lintel.c', dependencies: libpci)
+executable('kexec-lintel-nofbreset', 'kexec-lintel.c', dependencies: libpci, c_args: [ '-DNO_FBRESET' ])
+executable('kexec-lintel-noiommucheck-nofbreset', 'kexec-lintel.c', dependencies: libpci, c_args: [ '-DNO_FBRESET', '-DNO_IOMMU_CHECK' ])
+executable('kexec-lintel-noiommucheck', 'kexec-lintel.c', dependencies: libpci, c_args: [ '-DNO_IOMMU_CHECK' ])

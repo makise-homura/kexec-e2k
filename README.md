@@ -11,6 +11,15 @@ ninja
 * `<limits.h>` should have `PATH_MAX` defined.
 * `libpci` should be available to meson.
 
+## Binaries
+
+It will produce four binaries:
+
+* `kexec-lintel`: just a normal kexec-lintel binary.
+* `kexec-lintel-nofbreset`: the one which does not reset PCI device of the active framebuffer, so lintel would crash if framebuffer device is different from VGA16.
+* `kexec-lintel-noiommucheck`: the one which does not check that IOMMU is off, so lintel would crash when it is on.
+* `kexec-lintel-noiommucheck-nofbreset`: a combination of the two above.
+
 # Usage
 
 ```
