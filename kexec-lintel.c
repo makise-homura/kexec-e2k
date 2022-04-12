@@ -9,9 +9,11 @@
 #include <utmp.h>
 #include <utmpx.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/klog.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <linux/types.h>
 #include <linux/fb.h>
 #include <pci/pci.h>
@@ -87,6 +89,15 @@ char *quick_dirname(char *arg)
     return arg;
 }
 
+int path_snprintf_nc(char *buf, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int sz = vsnprintf(buf, PATH_MAX, fmt, ap);
+    va_end(ap);
+    return (sz >= PATH_MAX) ? -1 : 0;
+}
+
 void path_snprintf(char *buf, const char *name, const char *fmt, ...)
 {
     va_list ap;
@@ -103,31 +114,41 @@ void path_readlink(const char *link, char *buf)
     if (ls == PATH_MAX) cancel(70, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
 }
 
-void read_sysfs(const char *file, char **buf)
+void read_sysfs(const char *file, char **buf, DIR *dir)
 {
     int fd;
     off_t size = 4096;
     struct stat st;
-    if(stat(file, &st) == -1) cancel(71, "Can't stat %s: %s\n", file, strerror(errno));
+    if(stat(file, &st) == -1)
+    {
+        int e = errno;
+        if (dir) closedir(dir);
+        cancel(71, "Can't stat %s: %s\n", file, strerror(e));
+    }
     if(st.st_size > 0) size = st.st_size;
 
     if ((fd = open(file, O_RDONLY)) == -1)
     {
-        cancel(72, "Can't open %s for reading: %s\n", file, strerror(errno));
+        int e = errno;
+        if (dir) closedir(dir);
+        cancel(72, "Can't open %s for reading: %s\n", file, strerror(e));
     }
 
-    if((*buf = malloc(size)) == NULL)
+    if((*buf = malloc(size + 1)) == NULL)
     {
+        if (dir) closedir(dir);
         close(fd);
         cancel(73, "Can't allocate %d bytes to read %s\n", size, file);
     }
-    memset(buf, 0, size);
+    memset(buf, 0, size + 1);
 
     if (read(fd, *buf, size) < 1)
     {
+        int e = errno;
+        if (dir) closedir(dir);
         close(fd);
         free(*buf);
-        cancel(74, "Can't read %s: %s\n", file, strerror(errno));
+        cancel(74, "Can't read %s: %s\n", file, strerror(e));
     }
     close(fd);
 }
@@ -195,6 +216,67 @@ void bridge_reset(char *pciid)
     pci_cleanup(pacc);
 }
 
+void delete_module(const char *name)
+{
+    if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(83, "Can't remove module %s: %s\n", name, strerror(errno));
+}
+
+int detect_vtcon(const char *signature)
+{
+    DIR *pdir;
+    struct dirent *pdirent;
+    char *contents;
+
+    if ((pdir = opendir("/sys/devices/virtual/vtconsole/")) == NULL) cancel(84, "Can't open vtconsole directory: %s\n", strerror(errno));
+
+    for(;;)
+    {
+        errno = 0;
+        pdirent = readdir(pdir);
+        if (pdirent == NULL)
+        {
+            int e = errno;
+            closedir(pdir);
+            if (e) cancel(86, "Can't read vtconsole directory: %s\n", strerror(errno));
+            cancel(87, "Can't find console that is %s.\n", signature);
+        }
+
+        char name[PATH_MAX];
+        if(path_snprintf_nc(name, "/sys/class/vtconsole/%s/name", pdirent->d_name) == -1)
+        {
+            closedir(pdir);
+            cancel(88, "Path to virtual console name is greater than %d bytes", name, PATH_MAX - 1);
+        }
+
+        read_sysfs(name, &contents, pdir);
+        if (strstr(contents, signature) != NULL)
+        {
+            free(contents);
+            break;
+        }
+        free(contents);
+    }
+
+    char *desired = pdirent->d_name;
+    if(strncmp(desired, "vtcon", 5))
+    {
+        closedir(pdir);
+        cancel(89, "Virtual console name %s is wrong", desired);
+    }
+
+    char *endp;
+    errno = 0;
+    int vtconnum = strtol(desired + 5, &endp, 10);
+    if (errno || *endp)
+    {
+        closedir(pdir);
+        cancel(90, "Malformed vtcon number in sysfs.\n");
+    }
+
+    if(closedir(pdir)) cancel(85, "Can't close vtconsole directory: %s\n", strerror(errno));
+    return vtconnum;
+}
+
 void reset_fbdriver(int tty)
 {
     /* Current kernels require specific adapter reset sequence to be performed before kexec. */
@@ -205,6 +287,8 @@ void reset_fbdriver(int tty)
         return;
     }
 
+    int vtcon = detect_vtcon("frame buffer device");
+
     char fbdev[PATH_MAX];
     char pcilnk[PATH_MAX];
     char *pciid;
@@ -212,8 +296,11 @@ void reset_fbdriver(int tty)
     char pciabsdev[PATH_MAX];
     char *pcibridge;
     char pciremove[PATH_MAX];
+    char driverlnk[PATH_MAX];
+    char *modname;
+    char vtconbind[PATH_MAX];
 
-    printf("Active framebuffer device is %d.\n", fb);
+    printf("Active framebuffer device is %d, active vtcon device is %d.\n", fb, vtcon);
     path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
     path_readlink(fbdev, pcilnk);
     pciid = quick_basename(pcilnk);
@@ -221,8 +308,17 @@ void reset_fbdriver(int tty)
     path_readlink(pcidev, pciabsdev);
     pcibridge = quick_basename(quick_dirname(pciabsdev));
     path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
+    path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
+    modname = quick_basename(driverlnk);
+    path_snprintf(vtconbind, "Virtual console bind command pseudofile", "/sys/class/vtconsole/vtcon%d/bind", vtcon);
 
-    printf("Removing device %s.\n", pciid);
+    printf("Unbinding virtual console vtcon%d.\n", vtcon);
+    write_sysfs(vtconbind, "0\n");
+
+    printf("Unloading module %s.\n", modname);
+    delete_module(modname);
+
+    printf("Removing PCI device %s.\n", pciid);
     write_sysfs(pciremove, "1\n");
 
     printf("Performing bridge reset of %s.\n", pcibridge);
