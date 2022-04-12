@@ -306,6 +306,13 @@ void reset_fbdriver(int tty)
     path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
     path_readlink(fbdev, pcilnk);
     pciid = quick_basename(pcilnk);
+
+    if (!strncmp(pciid, "vga16fb", 7))
+    {
+        printf("Framebuffer console is %s, no need to reset.\n", pciid);
+        return;
+    }
+
     path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
     path_readlink(pcidev, pciabsdev);
     pcibridge = quick_basename(quick_dirname(pciabsdev));
