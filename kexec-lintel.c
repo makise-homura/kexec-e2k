@@ -241,6 +241,8 @@ int detect_vtcon(const char *signature)
             cancel(87, "Can't find console that is %s.\n", signature);
         }
 
+        if (pdirent->d_type != DT_LNK) continue;
+
         char name[PATH_MAX];
         if(path_snprintf_nc(name, "/sys/class/vtconsole/%s/name", pdirent->d_name) == -1)
         {
