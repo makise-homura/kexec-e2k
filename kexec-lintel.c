@@ -140,7 +140,7 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
         close(fd);
         cancel(73, "Can't allocate %d bytes to read %s\n", size, file);
     }
-    memset(buf, 0, size + 1);
+    memset(*buf, 0, size + 1);
 
     if (read(fd, *buf, size) < 1)
     {
