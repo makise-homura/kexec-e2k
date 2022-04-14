@@ -6,6 +6,17 @@ cd build
 ninja
 ```
 
+You may disable some of the following options by calling `meson` with parameter like `-D<option>=disabled`:
+
+* `build_generic`: Build generic flavor of kexec-lintel
+* `build_nofbreset`: Build flavor of kexec-lintel without framebuffer reset
+* `build_noiommucheck`: Build flavor of kexec-lintel without checking for iommu
+* `build_noiommucheck_nofbreset`: Build flavor of kexec-lintel without both checks
+
+E.g. you may run `meson build -Dbuild_noiommucheck=disabled -Dbuild_generic=disabled` if you don't have `libpci` and don't want to build corresponding targets.
+
+By default, all options are enabled, so all the targets are built.
+
 ## Build requirements
 
 * `<limits.h>` should have `PATH_MAX` defined.
