@@ -9,7 +9,7 @@ ninja
 ## Build requirements
 
 * `<limits.h>` should have `PATH_MAX` defined.
-* `libpci` should be available to meson.
+* `libpci` should be available to meson to enable bridge reset (but project is still buildable without it).
 
 ## Binaries
 

@@ -230,22 +230,26 @@ void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
 
 void bridge_reset(char *pciid)
 {
-    int domain, bus, dev, func;
-    parse_pci_id(pciid, &domain, &bus, &dev, &func);
+    #ifndef NO_BRIDGE_RESET
+        int domain, bus, dev, func;
+        parse_pci_id(pciid, &domain, &bus, &dev, &func);
 
-    /* libpci seems to have error handling undocumented; so we skip it here. */
-    struct pci_access *pacc = pci_alloc();
-    pci_init(pacc);
-    struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
+        /* libpci seems to have error handling undocumented; so we skip it here. */
+        struct pci_access *pacc = pci_alloc();
+        pci_init(pacc);
+        struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
 
-    uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
-    pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
-    usleep(10000);
-    pci_write_word(pdev, 0x3E, bridge_ctl);
-    usleep(500000);
+        uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
+        pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
+        usleep(10000);
+        pci_write_word(pdev, 0x3E, bridge_ctl);
+        usleep(500000);
 
-    pci_free_dev(pdev);
-    pci_cleanup(pacc);
+        pci_free_dev(pdev);
+        pci_cleanup(pacc);
+    #else
+        printf("Compiled without libpci, won't reset the bridge.\n");
+    #endif
 }
 
 void delete_module(const char *name)
