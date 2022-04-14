@@ -21,7 +21,39 @@
 
 const size_t alignment = 4096;
 
+const unit64_t LINTEL_BCD_SIGNATURE = 0x012345678ABCDEF0ull;
+
 struct lintel_reboot_param lintel __attribute__((aligned(alignment)));
+
+struct __attribute__((packed)) xrt_BcdHeader_t
+{
+    uint64_t signature;
+    uint32_t files_num;
+    uint64_t free_lba;
+};
+
+struct __attribute__((packed)) xrt_BcdFile_t
+{
+    uint64_t lba;
+    uint64_t size;
+    uint64_t init_size;
+    uint32_t tag;
+    uint32_t checksum;
+};
+
+enum xrt_BcdFileTag_t
+{
+    PRIORITY_TAG_LINTEL,
+    PRIORITY_TAG_LINTEL_OBJ,
+    PRIORITY_TAG_X86BIOS,
+    PRIORITY_TAG_X86BIOS_RECOVERY,
+    PRIORITY_TAG_LIBRCOMP,
+    PRIORITY_TAG_BCDBOOTINFO,
+    PRIORITY_TAG_CODEBASE,
+    PRIORITY_TAG_LOG,
+    PRIORITY_TAG_VIDEOBIOS,
+    PRIORITY_TAG_KEXEC_JUMPER
+};
 
 void cancel(int num, const char *fmt, ...)
 {
@@ -374,14 +406,9 @@ void read_lintel(FILE *f, size_t realsize)
 int bcd_check_files(FILE *f)
 {
     if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to possible header of file: %s\n", strerror(errno)); }
-    struct __attribute__((packed))
-    {
-        uint64_t signature;
-        uint32_t files_num;
-        uint64_t free_lba;
-    } header;
+    struct xrt_BcdHeader_t header;
     if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); cancel(10, "Can't read header of lintel file, file might be truncated\n"); }
-    if (header.signature == 0x012345678ABCDEF0ull) return header.files_num;
+    if (header.signature == LINTEL_BCD_SIGNATURE) return header.files_num;
     return -1;
 }
 
@@ -392,14 +419,7 @@ void load_bcd_lintel(FILE *f, int files)
     for (int i = 0; i < files; ++i)
     {
 
-        struct __attribute__((packed)) xrt_BcdFile_t
-        {
-            uint64_t lba;
-            uint64_t size;
-            uint64_t init_size;
-            uint32_t tag;
-            uint32_t checksum;
-        } file;
+        struct xrt_BcdFile_t file;
         if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(11, "Can't read file %d header of BCD file, file might be truncated\n"); }
         printf("BCD file %d: /%d, offset %ld blocks, size %ld blocks, init_size %ld blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
 
