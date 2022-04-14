@@ -21,7 +21,7 @@
 
 const size_t alignment = 4096;
 
-const unit64_t LINTEL_BCD_SIGNATURE = 0x012345678ABCDEF0ull;
+const uint64_t LINTEL_BCD_SIGNATURE = 0x012345678ABCDEF0ull;
 
 struct lintel_reboot_param lintel __attribute__((aligned(alignment)));
 
