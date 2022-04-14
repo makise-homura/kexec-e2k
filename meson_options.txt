@@ -1,0 +1,4 @@
+option('build_generic', type : 'feature', value : 'enabled', description : 'Build generic flavor of kexec-lintel')
+option('build_nofbreset', type : 'feature', value : 'enabled', description : 'Build flavor of kexec-lintel without framebuffer reset')
+option('build_noiommucheck', type : 'feature', value : 'enabled', description : 'Build flavor of kexec-lintel without checking for iommu')
+option('build_noiommucheck_nofbreset', type : 'feature', value : 'enabled', description : 'Build flavor of kexec-lintel without both checks')
