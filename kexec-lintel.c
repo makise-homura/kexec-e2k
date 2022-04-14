@@ -405,37 +405,69 @@ void read_lintel(FILE *f, size_t realsize)
     atexit(free_lintel);
     if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
     printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
+    fclose(f);
 }
 
-int bcd_check_files(FILE *f)
+struct xrt_BcdHeader_t bcd_check_files(FILE *f)
 {
     if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to possible header of file: %s\n", strerror(errno)); }
     struct xrt_BcdHeader_t header;
     if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); cancel(10, "Can't read header of lintel file, file might be truncated\n"); }
-    if (header.signature == LINTEL_BCD_SIGNATURE) return header.files_num;
-    return -1;
+    if (header.signature != LINTEL_BCD_SIGNATURE) header.files_num = -1;
+    return header;
 }
 
-void load_bcd_lintel(FILE *f, int files)
+void patch_jumper_info(const struct xrt_BcdFile_t super_file)
 {
-    printf ("File is BCD container (%d files).\n", files);
+    printf("BCD file contains kexec jumper, patching the header.\n");
 
-    for (int i = 0; i < files; ++i)
+    struct xrt_BcdHeader_t *subheader = (struct xrt_BcdHeader_t*)((char*)lintel.image + (super_file.init_size - 1) * 512); /* BCD map should be located in the last sector of lintel file */
+    if (subheader->signature != LINTEL_BCD_SIGNATURE) cancel(12, "Can't find BCD signature in super file\n");
+    struct xrt_BcdFile_t *files = (struct xrt_BcdFile_t*)((char*)subheader + sizeof(struct xrt_BcdHeader_t));
+    for (int i = 0; i < subheader->files_num; ++i)
     {
+        if ( files[i].tag == PRIORITY_TAG_KEXEC_JUMPER )
+        {
+            files[i].lba = super_file.lba;
+            files[i].size = super_file.size;
+            return;
+        }
+    }
+    cancel(12, "Can't find kexec jumper in super file\n");
+}
 
+void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
+{
+    printf ("File is BCD container (%d files).\n", header.files_num);
+
+    struct xrt_BcdFile_t super_file = {0, 0, 0, 0, 0};
+    for (int i = 0; i < header.files_num; ++i)
+    {
         struct xrt_BcdFile_t file;
         if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(11, "Can't read file %d header of BCD file, file might be truncated\n"); }
         printf("BCD file %d: /%d, offset %ld blocks, size %ld blocks, init_size %ld blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
 
-        if (file.tag == 0) /* 0 is the tag of Lintel binary */
+        if (file.tag == PRIORITY_TAG_LINTEL)
         {
+            if (i != 0) { fclose(f); cancel(12, "Lintel file must be the first one in BCD\n"); }
             if (file.size > file.init_size) { fclose(f); cancel(13, "Can't read lintel file from BCD file: file is uninitialized\n"); }
-            if (fseek(f, 512 * file.lba, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
-            read_lintel(f, 512 * file.size);
-            return;
+            super_file.tag = file.tag;
+            super_file.lba = file.lba;
+            super_file.init_size = file.size; /* Save for future patching in case of kexec jumper exists */
+            super_file.size = file.size;
+        }
+        if (file.tag == PRIORITY_TAG_KEXEC_JUMPER)
+        {
+            super_file.tag = file.tag;
+            super_file.size = header.free_lba - super_file.lba;
+            break;
         }
     }
-    fclose(f); cancel(12, "Can't find lintel file in BCD file\n");
+    if (!super_file.size) { fclose(f); cancel(12, "Can't find lintel file in BCD file\n"); }
+
+    if (fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
+    read_lintel(f, 512 * super_file.size);
+    if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER) patch_jumper_info(super_file);
 }
 
 void load_raw_lintel(FILE *f)
@@ -454,11 +486,9 @@ void load_lintel(const char *fname)
     if (f == NULL) cancel(1, "Can't open %s: %s\n", fname, strerror(errno));
     printf("Loading lintel from %s:\n", fname);
 
-    int files = bcd_check_files(f);
-    if (files == -1) load_raw_lintel(f);
-    else load_bcd_lintel(f, files);
-
-    fclose(f);
+    struct xrt_BcdHeader_t header = bcd_check_files(f);
+    if (header.files_num == -1) load_raw_lintel(f);
+    else load_bcd_lintel(f, header);
 }
 
 int check_syslog(const char *marker)
