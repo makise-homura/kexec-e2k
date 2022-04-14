@@ -67,41 +67,47 @@ void cancel(int num, const char *fmt, ...)
 enum cancel_reasons_t
 {
     C_SUCCESS = 0,
-    C_FILE_OPEN,
+    C_FILE_OPEN = 10,
     C_FILE_SEEK,
     C_FILE_TELL,
     C_FILE_ALLOC,
     C_FILE_READ,
-    C_DEV_OPEN,
+    C_FILE_CLOSE,
+    C_DEV_OPEN = 20,
     C_DEV_IOCTL,
-    C_RUNLEVEL_NONE,
+    C_RUNLEVEL_NONE = 25,
     C_RUNLEVEL_WRONG,
-    C_BCD_HEADER,
+    C_BCD_HEADER = 30,
     C_BCD_FILEHEADER,
     C_BCD_ORDER,
     C_BCD_READ,
     C_BCD_NOTFOUND,
     C_BCD_SEEK,
-    C_TTY_NONE,
+    C_TTY_NONE = 40,
     C_TTY_WRONG,
-    C_SUPER_HEADER,
+    C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
-    C_FBDEV_OPEN,
-    C_FBDEV_IOCTL,
-    C_SYSRQ_OPEN = 40,
+    C_SYSRQ_OPEN = 50,
     C_SYSRQ_WRITE,
-    C_IOMMU_ENABLED = 60,
+    C_SYSRQ_CLOSE,
+    C_IOMMU_ENABLED = 55,
     C_IOMMU_STAT,
-    C_LINK_READ = 66,
+    C_FBDEV_OPEN = 60,
+    C_FBDEV_IOCTL,
+    C_FBDEV_CLOSE,
+    C_RMMOD_FAULT = 65,
+    C_LINK_READ = 70,
     C_LINK_LONG,
-    C_PATH_LONG,
+    C_PATH_LONG = 75,
+    C_SYSFS_STAT = 80,
+    C_SYSFS_ALLOC,
     C_SYSFS_OPENWRITE,
     C_SYSFS_WRITE,
-    C_SYSFS_STAT,
+    C_SYSFS_CLOSEWRITE,
     C_SYSFS_OPENREAD,
-    C_SYSFS_ALLOC,
     C_SYSFS_READ,
-    C_PCI_DOMAIN_NONE,
+    C_SYSFS_CLOSEREAD,
+    C_PCI_DOMAIN_NONE = 90,
     C_PCI_DOMAIN_WRONG,
     C_PCI_BUS_NONE,
     C_PCI_BUS_WRONG,
@@ -109,8 +115,7 @@ enum cancel_reasons_t
     C_PCI_DEV_WRONG,
     C_PCI_FUNC_NONE,
     C_PCI_FUNC_WRONG,
-    C_RMMOD_FAULT,
-    C_VTCON_OPENDIR,
+    C_VTCON_OPENDIR = 100,
     C_VTCON_READDIR,
     C_VTCON_NOTFOUND,
     C_VTCON_PATHLONG,
@@ -141,12 +146,8 @@ int con2fbmap(int tty)
         if (errno == ENOENT) return -1;
         cancel(C_FBDEV_OPEN, "Can't open framebuffer device %s: %s\n", fbpath, strerror(errno));
     }
-    if (ioctl(fd, FBIOGET_CON2FBMAP, &map))
-    {
-        close(fd);
-        cancel(C_FBDEV_IOCTL, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno));
-    }
-    close(fd);
+    if (ioctl(fd, FBIOGET_CON2FBMAP, &map)) { close(fd); cancel(C_FBDEV_IOCTL, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno)); }
+    if (close(fd) == -1) cancel(C_FBDEV_CLOSE, "Can't close framebuffer device: %s\n", strerror(errno));
     return map.framebuffer;
 }
 
@@ -237,24 +238,21 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
         free(*buf);
         cancel(C_SYSFS_READ, "Can't read %s: %s\n", file, strerror(e));
     }
-    close(fd);
+    if(close(fd) == -1)
+    {
+        int e = errno;
+        if (dir) closedir(dir);
+        free(*buf);
+        cancel(C_SYSFS_CLOSEREAD, "Can't close %s opened for reading: %s\n", file, strerror(e));
+    }
 }
 
 void write_sysfs(const char *file, const char *buf)
 {
     int fd;
-
-    if ((fd = open(file, O_WRONLY)) == -1)
-    {
-        cancel(C_SYSFS_OPENWRITE, "Can't open %s for writing: %s\n", file, strerror(errno));
-    }
-
-    if (write(fd, buf, strlen(buf)) < 1)
-    {
-        close(fd);
-        cancel(C_SYSFS_WRITE, "Can't write %s: %s\n", file, strerror(errno));
-    }
-    close(fd);
+    if ((fd = open(file, O_WRONLY)) == -1) cancel(C_SYSFS_OPENWRITE, "Can't open %s for writing: %s\n", file, strerror(errno));
+    if (write(fd, buf, strlen(buf)) < 1) { int e = errno; close(fd); cancel(C_SYSFS_WRITE, "Can't write %s: %s\n", file, strerror(e)); }
+    if(close(fd) == -1) cancel(C_SYSFS_CLOSEWRITE, "Can't close %s opened for writing: %s\n", file, strerror(errno));
 }
 
 void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
@@ -460,7 +458,7 @@ void read_lintel(FILE *f, size_t realsize)
     atexit(free_lintel);
     if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
     printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
-    fclose(f);
+    if(fclose(f)) cancel(C_FILE_CLOSE, "Can't close lintel file\n");
 }
 
 struct xrt_BcdHeader_t bcd_check_files(FILE *f)
@@ -559,8 +557,7 @@ void remount_filesystems()
     FILE *f = fopen("/proc/sysrq-trigger","w");
     if (f == NULL) cancel(C_SYSRQ_OPEN, "Can't open sysrq-trigger file: %s\n", strerror(errno));
     if (fprintf(f, "u\n") < 1) { fclose(f); cancel(C_SYSRQ_WRITE, "Can't write to sysrq-trigger file\n"); }
-    fclose(f);
-
+    if (fclose(f)) cancel(C_SYSRQ_CLOSE, "Can't close sysrq-trigger file: %s\n", strerror(errno));
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
