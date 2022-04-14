@@ -124,15 +124,18 @@ enum cancel_reasons_t
     C_VTCON_CLOSEDIR
 };
 
-void check_iommu(void)
+#ifndef NO_IOMMU_CHECK
+static void check_iommu(void)
 {
     /* Current kernels don't allow lintel to detect devices if IOMMU is enabled. */
     struct stat st;
     if (stat("/sys/class/iommu", &st) != 0) cancel(C_IOMMU_STAT, "Can't stat() /sys/class/iommu directory (probably you have very old kernel): %s\n", strerror(errno));
     if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(C_IOMMU_ENABLED, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
 }
+#endif
 
-int con2fbmap(int tty)
+#ifndef NO_FBRESET
+static int con2fbmap(int tty)
 {
     /* See con2fbmap by Michael J. Hammel: https://gitlab.com/pibox/con2fbmap */
     const char *fbpath = "/dev/fb0";  /* any frame buffer will do */
@@ -151,7 +154,7 @@ int con2fbmap(int tty)
     return map.framebuffer;
 }
 
-char *quick_basename(char *arg)
+static char *quick_basename(char *arg)
 {
     /* We could have used libgen.h or string.h implementation, but it's unreliable which one we get. So we implement it on our own. */
     int l = strlen(arg);
@@ -165,7 +168,7 @@ char *quick_basename(char *arg)
     return parg;
 }
 
-char *quick_dirname(char *arg)
+static char *quick_dirname(char *arg)
 {
     int l = strlen(arg);
     if (l == 0) return NULL;
@@ -177,7 +180,7 @@ char *quick_dirname(char *arg)
     return arg;
 }
 
-int path_snprintf_nc(char *buf, const char *fmt, ...)
+static int path_snprintf_nc(char *buf, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -186,7 +189,7 @@ int path_snprintf_nc(char *buf, const char *fmt, ...)
     return (sz >= PATH_MAX) ? -1 : 0;
 }
 
-void path_snprintf(char *buf, const char *name, const char *fmt, ...)
+static void path_snprintf(char *buf, const char *name, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -195,14 +198,14 @@ void path_snprintf(char *buf, const char *name, const char *fmt, ...)
     if(sz >= PATH_MAX) cancel(C_PATH_LONG, "Path to %s is greater than %d bytes", name, PATH_MAX - 1);
 }
 
-void path_readlink(const char *link, char *buf)
+static void path_readlink(const char *link, char *buf)
 {
     ssize_t ls = readlink(link, buf, PATH_MAX);
     if (ls == -1) cancel(C_LINK_READ, "Can't read symbolic link %s: %s\n", link, strerror(errno));
     if (ls == PATH_MAX) cancel(C_LINK_LONG, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
 }
 
-void read_sysfs(const char *file, char **buf, DIR *dir)
+static void read_sysfs(const char *file, char **buf, DIR *dir)
 {
     int fd;
     off_t size = 4096;
@@ -247,7 +250,7 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
     }
 }
 
-void write_sysfs(const char *file, const char *buf)
+static void write_sysfs(const char *file, const char *buf)
 {
     int fd;
     if ((fd = open(file, O_WRONLY)) == -1) cancel(C_SYSFS_OPENWRITE, "Can't open %s for writing: %s\n", file, strerror(errno));
@@ -255,7 +258,7 @@ void write_sysfs(const char *file, const char *buf)
     if(close(fd) == -1) cancel(C_SYSFS_CLOSEWRITE, "Can't close %s opened for writing: %s\n", file, strerror(errno));
 }
 
-void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
+static void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
 {
     char *s, *endp;
     errno = 0;
@@ -281,7 +284,7 @@ void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
     if (errno || *endp) cancel(C_PCI_FUNC_WRONG, "Malformed func id for the bridge.\n");
 }
 
-void bridge_reset(char *pciid)
+static void bridge_reset(char *pciid)
 {
     #ifndef NO_BRIDGE_RESET
         int domain, bus, dev, func;
@@ -305,12 +308,12 @@ void bridge_reset(char *pciid)
     #endif
 }
 
-void delete_module(const char *name)
+static void delete_module(const char *name)
 {
     if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(C_RMMOD_FAULT, "Can't remove module %s: %s\n", name, strerror(errno));
 }
 
-int detect_vtcon(const char *signature)
+static int detect_vtcon(const char *signature)
 {
     DIR *pdir;
     struct dirent *pdirent;
@@ -367,7 +370,7 @@ int detect_vtcon(const char *signature)
     return vtconnum;
 }
 
-void reset_fbdriver(int tty)
+static void reset_fbdriver(int tty)
 {
     /* Current kernels require specific adapter reset sequence to be performed before kexec. */
     int fb = con2fbmap(tty);
@@ -423,8 +426,9 @@ void reset_fbdriver(int tty)
     printf("Performing bridge reset of %s.\n", pcibridge);
     bridge_reset(pcibridge);
 }
+#endif
 
-void check_runlevel(void)
+static void check_runlevel(void)
 {
     /* For the sake of not rebooting fully running system, restrict to runlevel 1 only. We suppose nothing that may leave garbage in filesystem is running there. */
     int runlevel = -1;
@@ -445,12 +449,12 @@ void check_runlevel(void)
     if (runlevel != 1) cancel(C_RUNLEVEL_WRONG, "You should run this only from runlevel 1, but current runlevel is %d\n", runlevel);
 }
 
-void free_lintel(void)
+static void free_lintel(void)
 {
     free(lintel.image);
 }
 
-void read_lintel(FILE *f, size_t realsize)
+static void read_lintel(FILE *f, size_t realsize)
 {
     lintel.image_size = realsize; /* Note: this should EXACTLY match the lintel binary size, because it is used to calculate jump address (mcstbug#133402 comment 38) */
     size_t aligned_size = realsize + alignment; aligned_size -= aligned_size % alignment;
@@ -461,7 +465,7 @@ void read_lintel(FILE *f, size_t realsize)
     if(fclose(f)) cancel(C_FILE_CLOSE, "Can't close lintel file\n");
 }
 
-struct xrt_BcdHeader_t bcd_check_files(FILE *f)
+static struct xrt_BcdHeader_t bcd_check_files(FILE *f)
 {
     if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(C_BCD_SEEK, "Can't seek to possible header of file: %s\n", strerror(errno)); }
     struct xrt_BcdHeader_t header;
@@ -470,7 +474,7 @@ struct xrt_BcdHeader_t bcd_check_files(FILE *f)
     return header;
 }
 
-void patch_jumper_info(const struct xrt_BcdFile_t super_file)
+static void patch_jumper_info(const struct xrt_BcdFile_t super_file)
 {
     printf("BCD file contains kexec jumper, patching the header.\n");
 
@@ -489,7 +493,7 @@ void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     cancel(C_SUPER_JUMPER, "Can't find kexec jumper in super file\n");
 }
 
-void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
+static void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
 {
     printf ("File is BCD container (%d files).\n", header.files_num);
 
@@ -523,7 +527,7 @@ void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
     if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER) patch_jumper_info(super_file);
 }
 
-void load_raw_lintel(FILE *f)
+static void load_raw_lintel(FILE *f)
 {
     size_t realsize;
     printf ("File seems to be raw lintel image.\n");
@@ -533,7 +537,7 @@ void load_raw_lintel(FILE *f)
     read_lintel(f, realsize);
 }
 
-void load_lintel(const char *fname)
+static void load_lintel(const char *fname)
 {
     FILE *f = fopen(fname,"r");
     if (f == NULL) cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno));
@@ -544,7 +548,7 @@ void load_lintel(const char *fname)
     else load_bcd_lintel(f, header);
 }
 
-int check_syslog(const char *marker)
+static int check_syslog(const char *marker)
 {
     char buf[1001];
     memset(buf, 0, 1001);
@@ -552,7 +556,7 @@ int check_syslog(const char *marker)
     return strstr(buf, marker) != NULL;
 }
 
-void remount_filesystems()
+static void remount_filesystems()
 {
     FILE *f = fopen("/proc/sysrq-trigger","w");
     if (f == NULL) cancel(C_SYSRQ_OPEN, "Can't open sysrq-trigger file: %s\n", strerror(errno));
@@ -561,7 +565,7 @@ void remount_filesystems()
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
-const char *check_args(int argc, char *argv[], const char *def, int *tty)
+static const char *check_args(int argc, char *argv[], const char *def, int *tty)
 {
     if (argc > 1)
     {
@@ -592,7 +596,7 @@ const char *check_args(int argc, char *argv[], const char *def, int *tty)
     return def;
 }
 
-int open_kexec()
+static int open_kexec()
 {
     int fd;
     if ((fd = open("/dev/kexec", O_RDONLY)) == -1) cancel(C_DEV_OPEN, "Can't open kexec device: %s\n", strerror(errno));
