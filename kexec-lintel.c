@@ -64,12 +64,67 @@ void cancel(int num, const char *fmt, ...)
     exit(num);
 }
 
+enum cancel_reasons_t
+{
+    C_SUCCESS = 0,
+    C_FILE_OPEN,
+    C_FILE_SEEK,
+    C_FILE_TELL,
+    C_FILE_ALLOC,
+    C_FILE_READ,
+    C_DEV_OPEN,
+    C_DEV_IOCTL,
+    C_RUNLEVEL_NONE,
+    C_RUNLEVEL_WRONG,
+    C_BCD_HEADER,
+    C_BCD_FILEHEADER,
+    C_BCD_ORDER,
+    C_BCD_READ,
+    C_BCD_NOTFOUND,
+    C_BCD_SEEK,
+    C_TTY_NONE,
+    C_TTY_WRONG,
+    C_SUPER_HEADER,
+    C_SUPER_JUMPER,
+    C_FBDEV_OPEN,
+    C_FBDEV_IOCTL,
+    C_SYSRQ_OPEN = 40,
+    C_SYSRQ_WRITE,
+    C_IOMMU_ENABLED = 60,
+    C_IOMMU_STAT,
+    C_LINK_READ = 66,
+    C_LINK_LONG,
+    C_PATH_LONG,
+    C_SYSFS_OPENWRITE,
+    C_SYSFS_WRITE,
+    C_SYSFS_STAT,
+    C_SYSFS_OPENREAD,
+    C_SYSFS_ALLOC,
+    C_SYSFS_READ,
+    C_PCI_DOMAIN_NONE,
+    C_PCI_DOMAIN_WRONG,
+    C_PCI_BUS_NONE,
+    C_PCI_BUS_WRONG,
+    C_PCI_DEV_NONE,
+    C_PCI_DEV_WRONG,
+    C_PCI_FUNC_NONE,
+    C_PCI_FUNC_WRONG,
+    C_RMMOD_FAULT,
+    C_VTCON_OPENDIR,
+    C_VTCON_READDIR,
+    C_VTCON_NOTFOUND,
+    C_VTCON_PATHLONG,
+    C_VTCON_WRONGNAME,
+    C_VTCON_WRONGNUM,
+    C_VTCON_CLOSEDIR
+};
+
 void check_iommu(void)
 {
     /* Current kernels don't allow lintel to detect devices if IOMMU is enabled. */
     struct stat st;
-    if (stat("/sys/class/iommu", &st) != 0) cancel(61, "Can't stat() /sys/class/iommu directory (probably you have very old kernel): %s\n", strerror(errno));
-    if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(62, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
+    if (stat("/sys/class/iommu", &st) != 0) cancel(C_IOMMU_STAT, "Can't stat() /sys/class/iommu directory (probably you have very old kernel): %s\n", strerror(errno));
+    if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(C_IOMMU_ENABLED, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
 }
 
 int con2fbmap(int tty)
@@ -84,12 +139,12 @@ int con2fbmap(int tty)
     if ((fd = open(fbpath, O_RDONLY)) == -1)
     {
         if (errno == ENOENT) return -1;
-        cancel(67, "Can't open framebuffer device %s: %s\n", fbpath, strerror(errno));
+        cancel(C_FBDEV_OPEN, "Can't open framebuffer device %s: %s\n", fbpath, strerror(errno));
     }
     if (ioctl(fd, FBIOGET_CON2FBMAP, &map))
     {
         close(fd);
-        cancel(68, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno));
+        cancel(C_FBDEV_IOCTL, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno));
     }
     close(fd);
     return map.framebuffer;
@@ -136,14 +191,14 @@ void path_snprintf(char *buf, const char *name, const char *fmt, ...)
     va_start(ap, fmt);
     int sz = vsnprintf(buf, PATH_MAX, fmt, ap);
     va_end(ap);
-    if(sz >= PATH_MAX) cancel(69, "Path to %s is greater than %d bytes", name, PATH_MAX - 1);
+    if(sz >= PATH_MAX) cancel(C_PATH_LONG, "Path to %s is greater than %d bytes", name, PATH_MAX - 1);
 }
 
 void path_readlink(const char *link, char *buf)
 {
     ssize_t ls = readlink(link, buf, PATH_MAX);
-    if (ls == -1) cancel(69, "Can't read %s: %s\n", link, strerror(errno));
-    if (ls == PATH_MAX) cancel(70, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
+    if (ls == -1) cancel(C_LINK_READ, "Can't read symbolic link %s: %s\n", link, strerror(errno));
+    if (ls == PATH_MAX) cancel(C_LINK_LONG, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
 }
 
 void read_sysfs(const char *file, char **buf, DIR *dir)
@@ -155,7 +210,7 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
     {
         int e = errno;
         if (dir) closedir(dir);
-        cancel(71, "Can't stat %s: %s\n", file, strerror(e));
+        cancel(C_SYSFS_STAT, "Can't stat %s: %s\n", file, strerror(e));
     }
     if(st.st_size > 0) size = st.st_size;
 
@@ -163,14 +218,14 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
     {
         int e = errno;
         if (dir) closedir(dir);
-        cancel(72, "Can't open %s for reading: %s\n", file, strerror(e));
+        cancel(C_SYSFS_OPENREAD, "Can't open %s for reading: %s\n", file, strerror(e));
     }
 
     if((*buf = malloc(size + 1)) == NULL)
     {
         if (dir) closedir(dir);
         close(fd);
-        cancel(73, "Can't allocate %d bytes to read %s\n", size, file);
+        cancel(C_SYSFS_ALLOC, "Can't allocate %d bytes to read %s\n", size, file);
     }
     memset(*buf, 0, size + 1);
 
@@ -180,7 +235,7 @@ void read_sysfs(const char *file, char **buf, DIR *dir)
         if (dir) closedir(dir);
         close(fd);
         free(*buf);
-        cancel(74, "Can't read %s: %s\n", file, strerror(e));
+        cancel(C_SYSFS_READ, "Can't read %s: %s\n", file, strerror(e));
     }
     close(fd);
 }
@@ -191,13 +246,13 @@ void write_sysfs(const char *file, const char *buf)
 
     if ((fd = open(file, O_WRONLY)) == -1)
     {
-        cancel(72, "Can't open %s for writing: %s\n", file, strerror(errno));
+        cancel(C_SYSFS_OPENWRITE, "Can't open %s for writing: %s\n", file, strerror(errno));
     }
 
     if (write(fd, buf, strlen(buf)) < 1)
     {
         close(fd);
-        cancel(74, "Can't write %s: %s\n", file, strerror(errno));
+        cancel(C_SYSFS_WRITE, "Can't write %s: %s\n", file, strerror(errno));
     }
     close(fd);
 }
@@ -208,24 +263,24 @@ void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
     errno = 0;
 
     s = strtok(pciid, ":.");
-    if (s == NULL) cancel(75, "Can't recognize domain id for the bridge.\n");
+    if (s == NULL) cancel(C_PCI_DOMAIN_NONE, "Can't recognize domain id for the bridge.\n");
     *domain = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(76, "Malformed domain id for the bridge.\n");
+    if (errno || *endp) cancel(C_PCI_DOMAIN_WRONG, "Malformed domain id for the bridge.\n");
 
     s = strtok(NULL, ":.");
-    if (s == NULL) cancel(77, "Can't recognize bus id for the bridge.\n");
+    if (s == NULL) cancel(C_PCI_BUS_NONE, "Can't recognize bus id for the bridge.\n");
     *bus = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(78, "Malformed bus id for the bridge.\n");
+    if (errno || *endp) cancel(C_PCI_BUS_WRONG, "Malformed bus id for the bridge.\n");
 
     s = strtok(NULL, ":.");
-    if (s == NULL) cancel(79, "Can't recognize dev id for the bridge.\n");
+    if (s == NULL) cancel(C_PCI_DEV_NONE, "Can't recognize dev id for the bridge.\n");
     *dev = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(80, "Malformed dev id for the bridge.\n");
+    if (errno || *endp) cancel(C_PCI_DEV_WRONG, "Malformed dev id for the bridge.\n");
 
     s = strtok(NULL, ":.");
-    if (s == NULL) cancel(81, "Can't recognize func id for the bridge.\n");
+    if (s == NULL) cancel(C_PCI_FUNC_NONE, "Can't recognize func id for the bridge.\n");
     *func = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(82, "Malformed func id for the bridge.\n");
+    if (errno || *endp) cancel(C_PCI_FUNC_WRONG, "Malformed func id for the bridge.\n");
 }
 
 void bridge_reset(char *pciid)
@@ -254,7 +309,7 @@ void bridge_reset(char *pciid)
 
 void delete_module(const char *name)
 {
-    if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(83, "Can't remove module %s: %s\n", name, strerror(errno));
+    if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(C_RMMOD_FAULT, "Can't remove module %s: %s\n", name, strerror(errno));
 }
 
 int detect_vtcon(const char *signature)
@@ -263,7 +318,7 @@ int detect_vtcon(const char *signature)
     struct dirent *pdirent;
     char *contents;
 
-    if ((pdir = opendir("/sys/devices/virtual/vtconsole/")) == NULL) cancel(84, "Can't open vtconsole directory: %s\n", strerror(errno));
+    if ((pdir = opendir("/sys/devices/virtual/vtconsole/")) == NULL) cancel(C_VTCON_OPENDIR, "Can't open vtconsole directory: %s\n", strerror(errno));
 
     for(;;)
     {
@@ -273,8 +328,8 @@ int detect_vtcon(const char *signature)
         {
             int e = errno;
             closedir(pdir);
-            if (e) cancel(86, "Can't read vtconsole directory: %s\n", strerror(errno));
-            cancel(87, "Can't find console that is %s.\n", signature);
+            if (e) cancel(C_VTCON_READDIR, "Can't read vtconsole directory: %s\n", strerror(errno));
+            cancel(C_VTCON_NOTFOUND, "Can't find console that is %s.\n", signature);
         }
 
         if (pdirent->d_name[0] == '.') continue;
@@ -282,7 +337,7 @@ int detect_vtcon(const char *signature)
         if(path_snprintf_nc(name, "/sys/class/vtconsole/%s/name", pdirent->d_name) == -1)
         {
             closedir(pdir);
-            cancel(88, "Path to virtual console name is greater than %d bytes", name, PATH_MAX - 1);
+            cancel(C_VTCON_PATHLONG, "Path to virtual console name is greater than %d bytes", name, PATH_MAX - 1);
         }
 
         read_sysfs(name, &contents, pdir);
@@ -298,7 +353,7 @@ int detect_vtcon(const char *signature)
     if(strncmp(desired, "vtcon", 5))
     {
         closedir(pdir);
-        cancel(89, "Virtual console name %s is wrong", desired);
+        cancel(C_VTCON_WRONGNAME, "Virtual console name %s is wrong", desired);
     }
 
     char *endp;
@@ -307,10 +362,10 @@ int detect_vtcon(const char *signature)
     if (errno || *endp)
     {
         closedir(pdir);
-        cancel(90, "Malformed vtcon number in sysfs.\n");
+        cancel(C_VTCON_WRONGNUM, "Malformed vtcon number in sysfs.\n");
     }
 
-    if(closedir(pdir)) cancel(85, "Can't close vtconsole directory: %s\n", strerror(errno));
+    if(closedir(pdir)) cancel(C_VTCON_CLOSEDIR, "Can't close vtconsole directory: %s\n", strerror(errno));
     return vtconnum;
 }
 
@@ -388,8 +443,8 @@ void check_runlevel(void)
     }
     endutxent();
 
-    if (runlevel < 0) cancel(8, "Can't get current runlevel: %s\n", errno ? strerror(errno) : "No RUN_LVL entry in utmp file");
-    if (runlevel != 1) cancel(9, "You should run this only from runlevel 1, but current runlevel is %d\n", runlevel);
+    if (runlevel < 0) cancel(C_RUNLEVEL_NONE, "Can't get current runlevel: %s\n", errno ? strerror(errno) : "No RUN_LVL entry in utmp file");
+    if (runlevel != 1) cancel(C_RUNLEVEL_WRONG, "You should run this only from runlevel 1, but current runlevel is %d\n", runlevel);
 }
 
 void free_lintel(void)
@@ -401,18 +456,18 @@ void read_lintel(FILE *f, size_t realsize)
 {
     lintel.image_size = realsize; /* Note: this should EXACTLY match the lintel binary size, because it is used to calculate jump address (mcstbug#133402 comment 38) */
     size_t aligned_size = realsize + alignment; aligned_size -= aligned_size % alignment;
-    if (posix_memalign(&lintel.image, alignment, aligned_size)) { fclose(f); cancel(4, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
+    if (posix_memalign(&lintel.image, alignment, aligned_size)) { fclose(f); cancel(C_FILE_ALLOC, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
     atexit(free_lintel);
-    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(5, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
+    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
     printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
     fclose(f);
 }
 
 struct xrt_BcdHeader_t bcd_check_files(FILE *f)
 {
-    if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to possible header of file: %s\n", strerror(errno)); }
+    if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(C_BCD_SEEK, "Can't seek to possible header of file: %s\n", strerror(errno)); }
     struct xrt_BcdHeader_t header;
-    if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); cancel(10, "Can't read header of lintel file, file might be truncated\n"); }
+    if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); cancel(C_BCD_HEADER, "Can't read header of lintel file, file might be truncated\n"); }
     if (header.signature != LINTEL_BCD_SIGNATURE) header.files_num = -1;
     return header;
 }
@@ -422,7 +477,7 @@ void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     printf("BCD file contains kexec jumper, patching the header.\n");
 
     struct xrt_BcdHeader_t *subheader = (struct xrt_BcdHeader_t*)((char*)lintel.image + (super_file.init_size - 1) * 512); /* BCD map should be located in the last sector of lintel file */
-    if (subheader->signature != LINTEL_BCD_SIGNATURE) cancel(12, "Can't find BCD signature in super file\n");
+    if (subheader->signature != LINTEL_BCD_SIGNATURE) cancel(C_SUPER_HEADER, "Can't find BCD signature in super file\n");
     struct xrt_BcdFile_t *files = (struct xrt_BcdFile_t*)((char*)subheader + sizeof(struct xrt_BcdHeader_t));
     for (int i = 0; i < subheader->files_num; ++i)
     {
@@ -433,7 +488,7 @@ void patch_jumper_info(const struct xrt_BcdFile_t super_file)
             return;
         }
     }
-    cancel(12, "Can't find kexec jumper in super file\n");
+    cancel(C_SUPER_JUMPER, "Can't find kexec jumper in super file\n");
 }
 
 void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
@@ -444,13 +499,13 @@ void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
     for (int i = 0; i < header.files_num; ++i)
     {
         struct xrt_BcdFile_t file;
-        if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(11, "Can't read file %d header of BCD file, file might be truncated\n"); }
+        if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(C_BCD_FILEHEADER, "Can't read file %d header of BCD file, file might be truncated\n"); }
         printf("BCD file %d: /%d, offset %ld blocks, size %ld blocks, init_size %ld blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
 
         if (file.tag == PRIORITY_TAG_LINTEL)
         {
-            if (i != 0) { fclose(f); cancel(12, "Lintel file must be the first one in BCD\n"); }
-            if (file.size > file.init_size) { fclose(f); cancel(13, "Can't read lintel file from BCD file: file is uninitialized\n"); }
+            if (i != 0) { fclose(f); cancel(C_BCD_ORDER, "Lintel file must be the first one in BCD\n"); }
+            if (file.size > file.init_size) { fclose(f); cancel(C_BCD_READ, "Can't read lintel file from BCD file: file is uninitialized\n"); }
             super_file.tag = file.tag;
             super_file.lba = file.lba;
             super_file.init_size = file.size; /* Save for future patching in case of kexec jumper exists */
@@ -463,9 +518,9 @@ void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
             break;
         }
     }
-    if (!super_file.size) { fclose(f); cancel(12, "Can't find lintel file in BCD file\n"); }
+    if (!super_file.size) { fclose(f); cancel(C_BCD_NOTFOUND, "Can't find lintel file in BCD file\n"); }
 
-    if (fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { fclose(f); cancel(14, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
+    if (fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { fclose(f); cancel(C_BCD_SEEK, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
     read_lintel(f, 512 * super_file.size);
     if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER) patch_jumper_info(super_file);
 }
@@ -474,8 +529,8 @@ void load_raw_lintel(FILE *f)
 {
     size_t realsize;
     printf ("File seems to be raw lintel image.\n");
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); cancel(2, "Can't seek lintel file: %s\n", strerror(errno)); }
-    if ((realsize = ftell(f)) == -1) { fclose(f); cancel(3, "Can't get file position of lintel file: %s\n", strerror(errno)); }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); cancel(C_FILE_SEEK, "Can't seek lintel file: %s\n", strerror(errno)); }
+    if ((realsize = ftell(f)) == -1) { fclose(f); cancel(C_FILE_TELL, "Can't get file position of lintel file: %s\n", strerror(errno)); }
     rewind(f);
     read_lintel(f, realsize);
 }
@@ -483,7 +538,7 @@ void load_raw_lintel(FILE *f)
 void load_lintel(const char *fname)
 {
     FILE *f = fopen(fname,"r");
-    if (f == NULL) cancel(1, "Can't open %s: %s\n", fname, strerror(errno));
+    if (f == NULL) cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno));
     printf("Loading lintel from %s:\n", fname);
 
     struct xrt_BcdHeader_t header = bcd_check_files(f);
@@ -502,8 +557,8 @@ int check_syslog(const char *marker)
 void remount_filesystems()
 {
     FILE *f = fopen("/proc/sysrq-trigger","w");
-    if (f == NULL) cancel(10, "Can't open sysrq-trigger file: %s\n", strerror(errno));
-    if (fprintf(f, "u\n") < 1) { fclose(f); cancel(11, "Can't write to sysrq-trigger file\n"); }
+    if (f == NULL) cancel(C_SYSRQ_OPEN, "Can't open sysrq-trigger file: %s\n", strerror(errno));
+    if (fprintf(f, "u\n") < 1) { fclose(f); cancel(C_SYSRQ_WRITE, "Can't write to sysrq-trigger file\n"); }
     fclose(f);
 
     while(!check_syslog("Emergency Remount complete\n"));
@@ -515,7 +570,7 @@ const char *check_args(int argc, char *argv[], const char *def, int *tty)
     {
         if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))
         {
-            cancel(0, "Usage: %s [ [--tty <N>] <path> | -h | --help ]\n\t<N> active tty number (default is %d)\n\t<path> is path to lintel file (default is %s)\n\t-h | --help: Print this help\n", argv[0], *tty, def);
+            cancel(C_SUCCESS, "Usage: %s [ [--tty <N>] <path> | -h | --help ]\n\t<N> active tty number (default is %d)\n\t<path> is path to lintel file (default is %s)\n\t-h | --help: Print this help\n", argv[0], *tty, def);
         }
         if (!strcmp(argv[1], "--tty"))
         {
@@ -526,13 +581,13 @@ const char *check_args(int argc, char *argv[], const char *def, int *tty)
                 *tty = strtol(argv[2], &endp, 0);
                 if (errno || *endp)
                 {
-                    cancel(17, "Malformed tty number %s (run %s --help for usage)", argv[2], argv[0]);
+                    cancel(C_TTY_WRONG, "Malformed tty number %s (run %s --help for usage)", argv[2], argv[0]);
                 }
                 return (argc == 3) ? def : argv[3];
             }
             else
             {
-                cancel(15, "You must specify tty number (run %s --help for usage)", argv[0]);
+                cancel(C_TTY_NONE, "You must specify tty number (run %s --help for usage)", argv[0]);
             }
         }
         return argv[1];
@@ -543,7 +598,7 @@ const char *check_args(int argc, char *argv[], const char *def, int *tty)
 int open_kexec()
 {
     int fd;
-    if ((fd = open("/dev/kexec", O_RDONLY)) == -1) cancel(6, "Can't open kexec device: %s\n", strerror(errno));
+    if ((fd = open("/dev/kexec", O_RDONLY)) == -1) cancel(C_DEV_OPEN, "Can't open kexec device: %s\n", strerror(errno));
     return fd;
 }
 
@@ -575,5 +630,5 @@ int main(int argc, char *argv[])
 
     int err = errno;
     close(kexec_fd);
-    cancel(7, "Failure performing ioctl (returned %d) to start lintel: %s\nNote: you should remount everything back to rw to bring system back to work\n", rv, strerror(err));
+    cancel(C_DEV_IOCTL, "Failure performing ioctl (returned %d) to start lintel: %s\nNote: you should remount everything back to rw to bring system back to work\n", rv, strerror(err));
 }
