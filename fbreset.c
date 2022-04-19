@@ -166,10 +166,10 @@ static void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func
 
 static void bridge_reset(char *pciid)
 {
-    #ifndef NO_BRIDGE_RESET
-        int domain, bus, dev, func;
-        parse_pci_id(pciid, &domain, &bus, &dev, &func);
+    int domain, bus, dev, func;
+    parse_pci_id(pciid, &domain, &bus, &dev, &func);
 
+    #ifndef NO_BRIDGE_RESET
         /* libpci seems to have error handling undocumented; so we skip it here. */
         struct pci_access *pacc = pci_alloc();
         pci_init(pacc);
@@ -184,7 +184,7 @@ static void bridge_reset(char *pciid)
         pci_free_dev(pdev);
         pci_cleanup(pacc);
     #else
-        printf("Compiled without libpci, won't reset the bridge.\n");
+        printf("Compiled without libpci, won't reset the bridge (%04d:%02d:%02d.%02d).\n", domain, bus, dev, func);
     #endif
 }
 

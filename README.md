@@ -17,6 +17,8 @@ E.g. you may run `meson build -Dbuild_noiommucheck=disabled -Dbuild_generic=disa
 
 By default, all options are enabled, so all the targets are built.
 
+Also, you may specify `-Dstatic=enabled` if you wish to build static binaries.
+
 ## Build requirements
 
 * `<limits.h>` should have `PATH_MAX` defined.
