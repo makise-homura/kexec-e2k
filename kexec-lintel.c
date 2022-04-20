@@ -599,8 +599,8 @@ static void usage(const char *argv0, const char *def, int tty)
     printf("Usage:\n");
     printf("    %s [OPTIONS] [FILE]\n\n", argv0);
     printf("    FILE:             Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper)\n");
-    printf("                      If not specified, %s is loaded\n\n", def);
-    printf("    OPTIONS:");
+    printf("                      If not specified, %s is loaded\n", def);
+    printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
     #ifndef NO_BRIDGE_RESET
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of tty%d (has no effect if -b, or all three of -M, -P, and -B are given)\n", tty);
