@@ -615,21 +615,18 @@ static void usage(const char *argv0, const char *def, int tty)
     printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     #ifndef NO_BRIDGE_RESET
-    printf("        -B:           Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
+    printf("        -B:           Don't reset PCI bridge associated with PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
+    #else
+    printf("        -B:           Ignored (this build does never reset PCI bridge associated with PCI Express device implementing current framebuffer)\n");
     #endif
     exit(C_SUCCESS);
 }
 
 static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags)
 {
-    #ifndef NO_BRIDGE_RESET
-        const char optstring[] = "h-:t:irbfVMPB";
-    #else
-        const char optstring[] = "h-:t:irbfVMP";
-    #endif
     for(;;)
     {
-        int opt = getopt(argc, argv, optstring);
+        int opt = getopt(argc, argv, "h-:t:irbfVMPB");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];

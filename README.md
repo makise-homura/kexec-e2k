@@ -24,7 +24,7 @@ kexec-lintel [OPTIONS] [FILE]
 Options:
 
 * `-h`, `--help`: Show help and exit
-* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of tty1 (has no effect if `-b`, or all three of `-M`, `-P`, and `-B` (if supported) are given)
+* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of tty1 (has no effect if `-b`, or all two or three of `-M`, `-P`, and, if supported, `-B` are given)
 * `-i`: Don't check that IOMMU is off
 * `-r`: Don't check current runlevel
 * `-b`: Don't reset current framebuffer device
@@ -34,7 +34,7 @@ Options:
 * `-P`: Don't remove PCI Express device implementing current framebuffer (has no effect if `-b` is given)
 * `-B`: Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if `-b` is given)
 
-Option `-B` is available only if built with `libpci`; if not, option is not recognized as valid and binary acts as if it is always enabled.
+Option `-B` is supported only if built with `libpci`; if not, option is silently skipped and binary acts as if it is always enabled.
 
 # Limitations
 
