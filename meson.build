@@ -18,4 +18,4 @@ else
     libpci = [ libpci_dep ]
 endif
 
-executable('kexec-lintel', [ 'kexec-lintel.c', 'fbreset.c', 'iommucheck.c' ], dependencies: libpci, link_args: static_arg)
+executable('kexec-lintel', 'kexec-lintel.c', dependencies: libpci, link_args: static_arg)
