@@ -20,7 +20,8 @@ enum cancel_reasons_t
     C_BCD_READ,
     C_BCD_NOTFOUND,
     C_BCD_SEEK,
-    C_TTY_NONE = 40,
+    C_OPTARG = 40,
+    C_OPTARG_LONG,
     C_TTY_WRONG,
     C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
@@ -61,8 +62,20 @@ enum cancel_reasons_t
     C_VTCON_CLOSEDIR
 };
 
+struct flags_t
+{
+    int iommu;
+    int runlevel;
+    int resetfb;
+    int fsflush;
+    int vtunbind;
+    int rmmod;
+    int rmpci;
+    int bridgerst;
+};
+
 void cancel(int num, const char *fmt, ...);
 void check_iommu(void);
-void reset_fbdriver(int tty);
+void reset_fbdriver(int tty, const struct flags_t flags);
 
 #endif

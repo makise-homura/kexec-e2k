@@ -6,47 +6,40 @@ cd build
 ninja
 ```
 
-You may disable some of the following options by calling `meson` with parameter like `-D<option>=disabled`:
-
-* `build_generic`: Build generic flavor of kexec-lintel
-* `build_nofbreset`: Build flavor of kexec-lintel without framebuffer reset
-* `build_noiommucheck`: Build flavor of kexec-lintel without checking for iommu
-* `build_noiommucheck_nofbreset`: Build flavor of kexec-lintel without both checks
-
-E.g. you may run `meson build -Dbuild_noiommucheck=disabled -Dbuild_generic=disabled` if you don't have `libpci` and don't want to build corresponding targets.
-
-By default, all options are enabled, so all the targets are built.
-
-Also, you may specify `-Dstatic=enabled` if you wish to build static binaries.
+You may specify `-Dstatic=enabled` if you wish to build static binary.
 
 ## Build requirements
 
 * `<limits.h>` should have `PATH_MAX` defined.
-* `libpci` should be available to meson to enable bridge reset (but project is still buildable without it).
-
-## Binaries
-
-It will produce four binaries:
-
-* `kexec-lintel`: just a normal kexec-lintel binary.
-* `kexec-lintel-nofbreset`: the one which does not reset PCI device of the active framebuffer, so lintel would crash if framebuffer device is different from VGA16.
-* `kexec-lintel-noiommucheck`: the one which does not check that IOMMU is off, so lintel would crash when it is on.
-* `kexec-lintel-noiommucheck-nofbreset`: a combination of the two above.
+* `libpci` should be available to meson to enable bridge reset (but project is still buildable without it, yet you will not be able to reset PCI bridge in this case).
 
 # Usage
 
 ```
-kexec-lintel [ [--tty <N>] <path> | -h | --help ]
+kexec-lintel [OPTIONS] [FILE]
 ```
 
-* `<N>`: active tty number (default is `1`)
-* `<path>`: path to lintel file (default is `/opt/mcst/lintel/bin/lintel_e8c.disk`)
-* `-h` or `--help`: Print help
+* `FILE`: Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper). If not specified, `/opt/mcst/lintel/bin/lintel_e8c.disk` is loaded.
+
+Options:
+
+* `-h`, `--help`: Show help and exit
+* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of tty1 (has no effect if `-b`, or all three of `-M`, `-P`, and `-B` (if supported) are given)
+* `-i`: Don't check that IOMMU is off
+* `-r`: Don't check current runlevel
+* `-b`: Don't reset current framebuffer device
+* `-f`: Don't sync, flush, and remount-read-only filesystems
+* `-V`: Don't unbing currently active vtconsole (has no effect if `-b` is given)
+* `-M`: Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if `-b` is given)
+* `-P`: Don't remove PCI Express device implementing current framebuffer (has no effect if `-b` is given)
+* `-B`: Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if `-b` is given)
+
+Option `-B` is available only if built with `libpci`; if not, option is not recognized as valid and binary acts as if it is always enabled.
 
 # Limitations
 
-* You should be in runlevel 1 to run this.
-* You should have IOMMU disabled.
-* You should have the same lintel BCD image written on some disk.
-* No other disks should contain lintel.
+* You should be in runlevel 1 to run this (but you can disable this check by `-r`).
+* You should have IOMMU disabled (but you can disable this check by `-i`).
+* You should have the same lintel BCD image written on some disk (unless supplied image contains kexec jumper).
+* No other disks should contain lintel except one mentioned above (unless supplied image contains kexec jumper).
 * All Lintel hadrware limitations (e.g. SATA controller 0, etc.) apply.

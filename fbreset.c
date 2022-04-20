@@ -138,6 +138,7 @@ static void write_sysfs(const char *file, const char *buf)
     if(close(fd) == -1) cancel(C_SYSFS_CLOSEWRITE, "Can't close %s opened for writing: %s\n", file, strerror(errno));
 }
 
+#ifndef NO_BRIDGE_RESET
 static void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
 {
     char *s, *endp;
@@ -169,24 +170,21 @@ static void bridge_reset(char *pciid)
     int domain, bus, dev, func;
     parse_pci_id(pciid, &domain, &bus, &dev, &func);
 
-    #ifndef NO_BRIDGE_RESET
-        /* libpci seems to have error handling undocumented; so we skip it here. */
-        struct pci_access *pacc = pci_alloc();
-        pci_init(pacc);
-        struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
+    /* libpci seems to have error handling undocumented; so we skip it here. */
+    struct pci_access *pacc = pci_alloc();
+    pci_init(pacc);
+    struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
 
-        uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
-        pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
-        usleep(10000);
-        pci_write_word(pdev, 0x3E, bridge_ctl);
-        usleep(500000);
+    uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
+    pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
+    usleep(10000);
+    pci_write_word(pdev, 0x3E, bridge_ctl);
+    usleep(500000);
 
-        pci_free_dev(pdev);
-        pci_cleanup(pacc);
-    #else
-        printf("Compiled without libpci, won't reset the bridge (%04d:%02d:%02d.%02d).\n", domain, bus, dev, func);
-    #endif
+    pci_free_dev(pdev);
+    pci_cleanup(pacc);
 }
+#endif
 
 static void delete_module(const char *name)
 {
@@ -250,59 +248,76 @@ static int detect_vtcon(const char *signature)
     return vtconnum;
 }
 
-void reset_fbdriver(int tty)
+void reset_fbdriver(int tty, const struct flags_t flags)
 {
     /* Current kernels require specific adapter reset sequence to be performed before kexec. */
-    int fb = con2fbmap(tty);
-    if (fb == -1)
-    {
-        printf("No /dev/fb0 available; you might have no video adapter, running lintel is pointless in this case, but we'll try to start it anyway.\n");
-        return;
-    }
 
-    int vtcon = detect_vtcon("frame buffer device");
-
-    char fbdev[PATH_MAX];
     char pcilnk[PATH_MAX];
     char *pciid;
-    char pcidev[PATH_MAX];
-    char pciabsdev[PATH_MAX];
-    char *pcibridge;
-    char pciremove[PATH_MAX];
-    char driverlnk[PATH_MAX];
-    char drivermod[PATH_MAX];
-    char *modname;
-    char vtconbind[PATH_MAX];
 
-    printf("Active framebuffer device is %d, active vtcon device is %d.\n", fb, vtcon);
-    path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
-    path_readlink(fbdev, pcilnk);
-    pciid = quick_basename(pcilnk);
-
-    if (!strncmp(pciid, "vga16fb", 7))
+    if(flags.rmmod || flags.rmpci || flags.bridgerst)
     {
-        printf("Framebuffer console is %s, no need to reset.\n", pciid);
-        return;
+        int fb = con2fbmap(tty);
+        if (fb == -1)
+        {
+            printf("No /dev/fb0 available; you might have no video adapter, running lintel is pointless in this case, but we'll try to start it anyway.\n");
+            return;
+        }
+        printf("Active framebuffer device is %d.\n", fb);
+
+        char fbdev[PATH_MAX];
+        path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
+        path_readlink(fbdev, pcilnk);
+        pciid = quick_basename(pcilnk);
+
+        if (!strncmp(pciid, "vga16fb", 7))
+        {
+            printf("Framebuffer console is %s, no need to reset.\n", pciid);
+            return;
+        }
     }
 
-    path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
-    path_readlink(pcidev, pciabsdev);
-    pcibridge = quick_basename(quick_dirname(pciabsdev));
-    path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
-    path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
-    path_readlink(driverlnk, drivermod);
-    modname = quick_basename(drivermod);
-    path_snprintf(vtconbind, "Virtual console bind command pseudofile", "/sys/class/vtconsole/vtcon%d/bind", vtcon);
+    if(flags.vtunbind)
+    {
+        char vtconbind[PATH_MAX];
+        int vtcon = detect_vtcon("frame buffer device");
+        printf("Active vtcon device is %d.\n", vtcon);
+        path_snprintf(vtconbind, "Virtual console bind command pseudofile", "/sys/class/vtconsole/vtcon%d/bind", vtcon);
+        printf("Unbinding virtual console vtcon%d.\n", vtcon);
+        write_sysfs(vtconbind, "0\n");
+    }
 
-    printf("Unbinding virtual console vtcon%d.\n", vtcon);
-    write_sysfs(vtconbind, "0\n");
+    if(flags.rmmod)
+    {
+        char driverlnk[PATH_MAX];
+        char drivermod[PATH_MAX];
+        char *modname;
+        path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
+        path_readlink(driverlnk, drivermod);
+        modname = quick_basename(drivermod);
+        printf("Unloading module %s.\n", modname);
+        delete_module(modname);
+    }
 
-    printf("Unloading module %s.\n", modname);
-    delete_module(modname);
+    if(flags.rmpci)
+    {
+        char pciremove[PATH_MAX];
+        path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
+        printf("Removing PCI device %s.\n", pciid);
+        write_sysfs(pciremove, "1\n");
+    }
 
-    printf("Removing PCI device %s.\n", pciid);
-    write_sysfs(pciremove, "1\n");
-
-    printf("Performing bridge reset of %s.\n", pcibridge);
-    bridge_reset(pcibridge);
+    #ifndef NO_BRIDGE_RESET
+    if(flags.bridgerst)
+    {
+        char pcidev[PATH_MAX];
+        char pciabsdev[PATH_MAX];
+        char *pcibridge;
+        path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
+        path_readlink(pcidev, pciabsdev);
+        pcibridge = quick_basename(quick_dirname(pciabsdev));
+        printf("Performing bridge reset of %s.\n", pcibridge);
+        bridge_reset(pcibridge);
+    }
+    #endif
 }

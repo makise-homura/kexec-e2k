@@ -198,35 +198,103 @@ static void remount_filesystems()
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
-static const char *check_args(int argc, char *argv[], const char *def, int *tty)
+static void usage(const char *argv0, const char *def, int tty)
 {
-    if (argc > 1)
+    printf("Usage:\n");
+    printf("    %s [OPTIONS] [FILE]\n\n", argv0);
+    printf("    FILE:             Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper)\n");
+    printf("                      If not specified, %s is loaded\n\n", def);
+    printf("    OPTIONS:");
+    printf("        -h | --help:  Show this help and exit\n");
+    #ifndef NO_BRIDGE_RESET
+    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of tty%d (has no effect if -b, or all three of -M, -P, and -B are given)\n", tty);
+    #else
+    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of tty%d (has no effect if -b, or both -M and -P are given)\n", tty);
+    #endif
+    printf("        -i:           Don't check that IOMMU is off\n");
+    printf("        -r:           Don't check current runlevel\n");
+    printf("        -b:           Don't reset current framebuffer device\n");
+    printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
+    printf("        -V:           Don't unbing currently active vtconsole (has no effect if -b is given)\n");
+    printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
+    printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
+    #ifndef NO_BRIDGE_RESET
+    printf("        -B:           Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
+    #endif
+    exit(C_SUCCESS);
+}
+
+static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags)
+{
+    #ifndef NO_BRIDGE_RESET
+        const char optstring[] = "h-:t:irbfVMPB";
+    #else
+        const char optstring[] = "h-:t:irbfVMP";
+    #endif
+    for(;;)
     {
-        if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))
+        int opt = getopt(argc, argv, optstring);
+        if(opt == -1)
         {
-            cancel(C_SUCCESS, "Usage: %s [ [--tty <N>] <path> | -h | --help ]\n\t<N> active tty number (default is %d)\n\t<path> is path to lintel file (default is %s)\n\t-h | --help: Print this help\n", argv[0], *tty, def);
+            return (optind >= argc) ? def : argv[optind];
         }
-        if (!strcmp(argv[1], "--tty"))
+
+        char *endp;
+        switch(opt)
         {
-            if (argc >= 3)
-            {
-                char *endp;
+            case 'i':
+                flags->iommu = 0;
+                break;
+
+            case 'r':
+                flags->runlevel = 0;
+                break;
+
+            case 'b':
+                flags->resetfb = 0;
+                break;
+
+            case 'f':
+                flags->fsflush = 0;
+                break;
+
+            case 'V':
+                flags->vtunbind = 0;
+                break;
+
+            case 'M':
+                flags->rmmod = 0;
+                break;
+
+            case 'P':
+                flags->rmpci = 0;
+                break;
+
+            case 'B':
+                flags->bridgerst = 0;
+                break;
+
+            case '?':
+                cancel(C_OPTARG, "Run %s --help for usage\n", argv[0]);
+
+            case 'h':
+                usage(argv[0], def, *tty);
+
+            case '-':
+                if(!strcmp(optarg, "help")) usage(argv[0], def, *tty);
+                if(strcmp(optarg, "tty")) cancel(C_OPTARG_LONG, "%s: incorrect long option -- '%s'\nRun %s --help for usage\n", argv[0], optarg, argv[0]);
+                if(optind >= argc) cancel(C_OPTARG, "%s: option requires an argument -- '--tty'\nRun %s --help for usage\n", argv[0], argv[0]);
+                optarg = argv[optind++];
+
+            case 't':
                 errno = 0;
-                *tty = strtol(argv[2], &endp, 0);
+                *tty = strtol(optarg, &endp, 0);
                 if (errno || *endp)
                 {
-                    cancel(C_TTY_WRONG, "Malformed tty number %s (run %s --help for usage)", argv[2], argv[0]);
+                    cancel(C_TTY_WRONG, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
-                return (argc == 3) ? def : argv[3];
-            }
-            else
-            {
-                cancel(C_TTY_NONE, "You must specify tty number (run %s --help for usage)", argv[0]);
-            }
         }
-        return argv[1];
     }
-    return def;
 }
 
 static int open_kexec()
@@ -239,30 +307,43 @@ static int open_kexec()
 int main(int argc, char *argv[])
 {
     int tty = 1;
-    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk", &tty);
+    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1 };
+    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk", &tty, &flags);
 
-    #ifndef NO_IOMMU_CHECK
+    if (flags.iommu)
+    {
         check_iommu();
-    #endif
+    }
 
-    check_runlevel();
+    if (flags.runlevel)
+    {
+        check_runlevel();
+    }
 
     load_lintel(fname);
 
-    #ifndef NO_FBRESET
+    if (flags.resetfb)
+    {
         printf("Resetting video driver...\n");
-        reset_fbdriver(tty);
-    #endif
+        reset_fbdriver(tty, flags);
+    }
 
-    printf("Flushing filesystems...\n");
-    sync();
-    remount_filesystems();
+    if (flags.fsflush)
+    {
+        printf("Flushing filesystems...\n");
+        sync();
+        remount_filesystems();
+    }
 
     printf("Rebooting to lintel...\n");
     int kexec_fd = open_kexec();
     int rv = ioctl(kexec_fd, LINTEL_REBOOT, &lintel);
-
     int err = errno;
     close(kexec_fd);
-    cancel(C_DEV_IOCTL, "Failure performing ioctl (returned %d) to start lintel: %s\nNote: you should remount everything back to rw to bring system back to work\n", rv, strerror(err));
+    cancel(C_DEV_IOCTL, "Failure performing ioctl (returned %d) to start lintel: %s\n", rv, strerror(err));
+
+    if (flags.fsflush)
+    {
+        printf("Note: you should remount everything back to rw to bring system back to work\n");
+    }
 }
