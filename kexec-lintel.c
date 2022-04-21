@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <utmp.h>
 #include <utmpx.h>
 #include <unistd.h>
@@ -118,7 +119,12 @@ enum cancel_reasons_t
     C_VTCON_PATHLONG,
     C_VTCON_WRONGNAME,
     C_VTCON_WRONGNUM,
-    C_VTCON_CLOSEDIR
+    C_VTCON_CLOSEDIR,
+    C_GLOB_AMBIG = 110,
+    C_GLOB_ALLOC,
+    C_GLOB_ABORT,
+    C_GLOB_NONE,
+    C_GLOB_UNEXPECTED
 };
 
 struct flags_t
@@ -575,9 +581,44 @@ static void load_raw_lintel(FILE *f)
 
 static void load_lintel(const char *fname)
 {
-    FILE *f = fopen(fname,"r");
-    if (f == NULL) cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno));
-    printf("Loading lintel from %s:\n", fname);
+    /* May be undefined in non-POSIX environments; then we don't expand tilde. */
+    #ifndef GLOB_TILDE
+        #define GLOB_TILDE 0
+    #endif
+
+    printf("Requested lintel path: %s\n", fname);
+    glob_t globbuf;
+    switch(glob(fname, GLOB_ERR | GLOB_TILDE, NULL, &globbuf))
+    {
+        case 0:
+            if (globbuf.gl_pathc != 1)
+            {
+                globfree(&globbuf);
+                cancel(C_GLOB_AMBIG, "Ambiguous pattern %s matching %d files\n", fname, globbuf.gl_pathc);
+            }
+            break;
+
+        case GLOB_NOSPACE:
+            globfree(&globbuf);
+            cancel(C_GLOB_ALLOC, "No memory globbing %s\n", fname);
+
+        case GLOB_ABORTED:
+            globfree(&globbuf);
+            cancel(C_GLOB_ABORT, "Read error while globbing %s\n", fname);
+
+        case GLOB_NOMATCH:
+            globfree(&globbuf);
+            cancel(C_GLOB_NONE, "No files found matching %s\n", fname);
+
+        default:
+            globfree(&globbuf);
+            cancel(C_GLOB_UNEXPECTED, "Unexpected error globbing %s, internal result: %s\n", fname, strerror(errno));
+    }
+
+    FILE *f = fopen(globbuf.gl_pathv[0],"r");
+    if (f == NULL) { globfree(&globbuf); cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno)); }
+    printf("Loading lintel from %s:\n", globbuf.gl_pathv[0]);
+    globfree(&globbuf);
 
     struct xrt_BcdHeader_t header = bcd_check_files(f);
     if (header.files_num == -1) load_raw_lintel(f);
@@ -606,6 +647,7 @@ static void usage(const char *argv0, const char *def, int tty)
     printf("Usage:\n");
     printf("    %s [OPTIONS] [FILE]\n\n", argv0);
     printf("    FILE:             Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper)\n");
+    printf("                      Wildcards are supported (to prevent shell expansion, put the argument in quotes). Only one file should fit the pattern then.\n");
     printf("                      If not specified, %s is loaded\n", def);
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
@@ -709,7 +751,7 @@ int main(int argc, char *argv[])
 {
     int tty = 1;
     struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1 };
-    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_e8c.disk", &tty, &flags);
+    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags);
 
     if (flags.iommu)
     {

@@ -19,7 +19,7 @@ You may specify `-Dstatic=enabled` if you wish to build static binary.
 kexec-lintel [OPTIONS] [FILE]
 ```
 
-* `FILE`: Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper). If not specified, `/opt/mcst/lintel/bin/lintel_e8c.disk` is loaded.
+* `FILE`: Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper). Wildcards are supported (to prevent shell expansion, put the argument in quotes). Only one file should fit the pattern then. If not specified, `/opt/mcst/lintel/bin/lintel_*.disk` is loaded.
 
 Options:
 
