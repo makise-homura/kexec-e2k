@@ -426,6 +426,19 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         delete_module(modname);
     }
 
+    #ifndef NO_BRIDGE_RESET
+    /* We should determine bridge path before removing device */
+    char pciabsdev[PATH_MAX];
+    char *pcibridge;
+    if(flags.bridgerst)
+    {
+        char pcidev[PATH_MAX];
+        path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
+        path_readlink(pcidev, pciabsdev);
+        pcibridge = quick_basename(quick_dirname(pciabsdev));
+    }
+    #endif
+
     if(flags.rmpci)
     {
         char pciremove[PATH_MAX];
@@ -437,12 +450,6 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     #ifndef NO_BRIDGE_RESET
     if(flags.bridgerst)
     {
-        char pcidev[PATH_MAX];
-        char pciabsdev[PATH_MAX];
-        char *pcibridge;
-        path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
-        path_readlink(pcidev, pciabsdev);
-        pcibridge = quick_basename(quick_dirname(pciabsdev));
         printf("Performing bridge reset of %s.\n", pcibridge);
         bridge_reset(pcibridge);
     }
