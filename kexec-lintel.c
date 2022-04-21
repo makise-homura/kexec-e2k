@@ -631,6 +631,7 @@ static void usage(const char *argv0, const char *def, int tty)
 
 static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags)
 {
+    int deftty = *tty;
     for(;;)
     {
         int opt = getopt(argc, argv, "h-:t:irbfVMPB");
@@ -678,7 +679,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 cancel(C_OPTARG, "Run %s --help for usage\n", argv[0]);
 
             case 'h':
-                usage(argv[0], def, *tty);
+                usage(argv[0], def, deftty);
 
             case '-':
                 if(!strcmp(optarg, "help")) usage(argv[0], def, *tty);
