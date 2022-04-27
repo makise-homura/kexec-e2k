@@ -2,6 +2,18 @@ project('kexec-lintel', 'c', meson_version: '>=0.50.0')
 cc = meson.get_compiler('c')
 cc.has_header_symbol('limits.h', 'PATH_MAX', required : true)
 
+if not meson.is_cross_build()
+    # Assume sizes are ok when cross compiling, because we are unable to check it
+    sz_pfile = cc.sizeof('FILE*', prefix: '#include <stdio.h>')
+    sz_plops = cc.sizeof('struct lintelops*', prefix: '#include "kexec-lintel.c"', args: '-DAS_INCLUDE', include_directories: include_directories('.'))
+    if (sz_pfile == -1) or (sz_plops == -1)
+        error('Can not check sizes of FILE* and struct lintelops*.')
+    endif
+    if not (sz_pfile == sz_plops)
+        error('Your platform has different pointer sizes of FILE and structs, can not build here.')
+    endif
+endif
+
 static = get_option('static').enabled()
 
 if static

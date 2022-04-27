@@ -872,6 +872,7 @@ static int open_kexec()
     return fd;
 }
 
+#ifndef AS_INCLUDE
 int main(int argc, char *argv[])
 {
     int tty = -1;
@@ -915,3 +916,4 @@ int main(int argc, char *argv[])
         printf("Note: you should remount everything back to rw to bring system back to work\n");
     }
 }
+#endif
