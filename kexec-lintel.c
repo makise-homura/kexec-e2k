@@ -692,7 +692,7 @@ static void usage(const char *argv0, const char *def)
     printf("    %s [OPTIONS] [FILE]\n\n", argv0);
     printf("    FILE:             Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper)\n");
     printf("                      Wildcards are supported (to prevent shell expansion, put the argument in quotes). Only one file should fit the pattern then.\n");
-    printf("                      If not specified, %s is loaded\n", def);
+    printf("                      If not specified, %s is loaded. Use a single dash to load from standard input\n", def);
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
     #ifndef NO_BRIDGE_RESET
