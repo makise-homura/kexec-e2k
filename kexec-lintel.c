@@ -115,16 +115,17 @@ enum cancel_reasons_t
     C_PCI_FUNC_WRONG,
     C_VTCON_OPENDIR = 100,
     C_VTCON_READDIR,
-    C_VTCON_NOTFOUND,
+    C_VTCON_BINDLONG,
     C_VTCON_PATHLONG,
-    C_VTCON_WRONGNAME,
-    C_VTCON_WRONGNUM,
     C_VTCON_CLOSEDIR,
     C_GLOB_AMBIG = 110,
     C_GLOB_ALLOC,
     C_GLOB_ABORT,
     C_GLOB_NONE,
-    C_GLOB_UNEXPECTED
+    C_GLOB_UNEXPECTED,
+    C_FBGLOB_ALLOC = 120,
+    C_FBGLOB_ABORT,
+    C_FBGLOB_UNEXPECTED
 };
 
 struct flags_t
@@ -148,20 +149,19 @@ static void cancel(int num, const char *fmt, ...)
     exit(num);
 }
 
-static int con2fbmap(int tty)
+static int con2fbmap(int tty, glob_t* globbuf)
 {
     /* See con2fbmap by Michael J. Hammel: https://gitlab.com/pibox/con2fbmap */
-    const char *fbpath = "/dev/fb0";  /* any frame buffer will do */
-
     int fd;
     struct fb_con2fbmap map;
     map.console = tty;
 
-    if ((fd = open(fbpath, O_RDONLY)) == -1)
+    if ((fd = open(globbuf->gl_pathv[0], O_RDONLY)) == -1)
     {
-        if (errno == ENOENT) return -1;
-        cancel(C_FBDEV_OPEN, "Can't open framebuffer device %s: %s\n", fbpath, strerror(errno));
+        globfree(globbuf);
+        cancel(C_FBDEV_OPEN, "Can't open framebuffer device: %s\n", strerror(errno));
     }
+    globfree(globbuf);
     if (ioctl(fd, FBIOGET_CON2FBMAP, &map)) { close(fd); cancel(C_FBDEV_IOCTL, "Can't perform FBIOGET_CON2FBMAP ioctl: %s\n", strerror(errno)); }
     if (close(fd) == -1) cancel(C_FBDEV_CLOSE, "Can't close framebuffer device: %s\n", strerror(errno));
     return map.framebuffer;
@@ -324,61 +324,57 @@ static void delete_module(const char *name)
     if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(C_RMMOD_FAULT, "Can't remove module %s: %s\n", name, strerror(errno));
 }
 
-static int detect_vtcon(const char *signature)
+static void unbind_vtcon(const char *signature)
 {
     DIR *pdir;
-    struct dirent *pdirent;
-    char *contents;
-
     if ((pdir = opendir("/sys/devices/virtual/vtconsole/")) == NULL) cancel(C_VTCON_OPENDIR, "Can't open vtconsole directory: %s\n", strerror(errno));
 
-    for(;;)
+    char bind[PATH_MAX];
+    int correct = 0, bound = 0;
+    while(!correct || !bound)
     {
         errno = 0;
-        pdirent = readdir(pdir);
+
+        struct dirent *pdirent = readdir(pdir);
         if (pdirent == NULL)
         {
             int e = errno;
             closedir(pdir);
             if (e) cancel(C_VTCON_READDIR, "Can't read vtconsole directory: %s\n", strerror(errno));
-            cancel(C_VTCON_NOTFOUND, "Can't find console that is %s.\n", signature);
+            printf ("Can't find console that is %s, no reset needed.\n", signature);
+            return;
         }
 
         if (pdirent->d_name[0] == '.') continue;
+
         char name[PATH_MAX];
         if(path_snprintf_nc(name, "/sys/class/vtconsole/%s/name", pdirent->d_name) == -1)
         {
             closedir(pdir);
-            cancel(C_VTCON_PATHLONG, "Path to virtual console name is greater than %d bytes", name, PATH_MAX - 1);
+            cancel(C_VTCON_PATHLONG, "Path to virtual console name is greater than %d bytes", PATH_MAX - 1);
         }
 
-        read_sysfs(name, &contents, pdir);
-        if (strstr(contents, signature) != NULL)
+        if(path_snprintf_nc(bind, "/sys/class/vtconsole/%s/bind", pdirent->d_name) == -1)
         {
-            free(contents);
-            break;
+            closedir(pdir);
+            cancel(C_VTCON_BINDLONG, "Path to virtual console bind command pseudofile is greater than %d bytes", PATH_MAX - 1);
         }
-        free(contents);
-    }
 
-    char *desired = pdirent->d_name;
-    if(strncmp(desired, "vtcon", 5))
-    {
-        closedir(pdir);
-        cancel(C_VTCON_WRONGNAME, "Virtual console name %s is wrong", desired);
-    }
+        char *vtcon_bind;
+        read_sysfs(bind, &vtcon_bind, pdir);
+        bound = (vtcon_bind[0] == '1');
+        free(vtcon_bind);
 
-    char *endp;
-    errno = 0;
-    int vtconnum = strtol(desired + 5, &endp, 10);
-    if (errno || *endp)
-    {
-        closedir(pdir);
-        cancel(C_VTCON_WRONGNUM, "Malformed vtcon number in sysfs.\n");
+        char *vtcon_name;
+        read_sysfs(name, &vtcon_name, pdir);
+        printf ("Console %s is %s, %s.\n", pdirent->d_name, vtcon_name, bound ? "active" : "inactive");
+        correct = (strstr(vtcon_name, signature) != NULL);
+        free(vtcon_name);
     }
 
     if(closedir(pdir)) cancel(C_VTCON_CLOSEDIR, "Can't close vtconsole directory: %s\n", strerror(errno));
-    return vtconnum;
+    printf("Active %s is found. Unbinding...\n", signature);
+    write_sysfs(bind, "0\n");
 }
 
 static void reset_fbdriver(int tty, const struct flags_t flags)
@@ -388,12 +384,42 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     char pcilnk[PATH_MAX];
     char *pciid;
 
+    if(flags.vtunbind)
+    {
+        unbind_vtcon("frame buffer device");
+    }
+
     if(flags.rmmod || flags.rmpci || flags.bridgerst)
     {
-        int fb = con2fbmap(tty);
+        glob_t globbuf;
+        switch(glob("/dev/fb*", GLOB_ERR, NULL, &globbuf))
+        {
+            case 0:
+                break;
+
+            case GLOB_NOMATCH:
+                globfree(&globbuf);
+                printf("No /dev/fb* exist; you might have no video adapter, or use VGA console instead of framebuffer one.\n");
+                return;
+
+            case GLOB_NOSPACE:
+                globfree(&globbuf);
+                cancel(C_FBGLOB_ALLOC, "No memory looking for framebuffers %s\n");
+
+            case GLOB_ABORTED:
+                globfree(&globbuf);
+                cancel(C_FBGLOB_ABORT, "Read error looking for framebuffers\n");
+
+            default:
+                globfree(&globbuf);
+                cancel(C_FBGLOB_UNEXPECTED, "Unexpected error looking for framebuffers, internal result: %s\n", strerror(errno));
+        }
+
+        int fb = con2fbmap(tty, &globbuf);
+
         if (fb == -1)
         {
-            printf("No /dev/fb0 available; you might have no video adapter, running lintel is pointless in this case, but we'll try to start it anyway.\n");
+            printf("No console is mapped to frame buffer device; you might have no video adapter, or use VGA console instead of framebuffer one.\n");
             return;
         }
         printf("Active framebuffer device is %d.\n", fb);
@@ -410,15 +436,6 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         }
     }
 
-    if(flags.vtunbind)
-    {
-        char vtconbind[PATH_MAX];
-        int vtcon = detect_vtcon("frame buffer device");
-        printf("Active vtcon device is %d.\n", vtcon);
-        path_snprintf(vtconbind, "Virtual console bind command pseudofile", "/sys/class/vtconsole/vtcon%d/bind", vtcon);
-        printf("Unbinding virtual console vtcon%d.\n", vtcon);
-        write_sysfs(vtconbind, "0\n");
-    }
 
     if(flags.rmmod)
     {
