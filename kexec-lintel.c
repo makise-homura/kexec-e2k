@@ -616,44 +616,53 @@ static void load_raw_lintel(FILE *f)
 
 static void load_lintel(const char *fname)
 {
-    /* May be undefined in non-POSIX environments; then we don't expand tilde. */
-    #ifndef GLOB_TILDE
-        #define GLOB_TILDE 0
-    #endif
-
-    printf("Requested lintel path: %s\n", fname);
-    glob_t globbuf;
-    switch(glob(fname, GLOB_ERR | GLOB_TILDE, NULL, &globbuf))
+    FILE *f;
+    if(strcmp(fname, "-"))
     {
-        case 0:
-            if (globbuf.gl_pathc != 1)
-            {
+        /* May be undefined in non-POSIX environments; then we don't expand tilde. */
+        #ifndef GLOB_TILDE
+            #define GLOB_TILDE 0
+        #endif
+
+        printf("Requested lintel path: %s\n", fname);
+        glob_t globbuf;
+        switch(glob(fname, GLOB_ERR | GLOB_TILDE, NULL, &globbuf))
+        {
+            case 0:
+                if (globbuf.gl_pathc != 1)
+                {
+                    globfree(&globbuf);
+                    cancel(C_GLOB_AMBIG, "Ambiguous pattern %s matching %d files\n", fname, globbuf.gl_pathc);
+                }
+                break;
+
+            case GLOB_NOSPACE:
                 globfree(&globbuf);
-                cancel(C_GLOB_AMBIG, "Ambiguous pattern %s matching %d files\n", fname, globbuf.gl_pathc);
-            }
-            break;
+                cancel(C_GLOB_ALLOC, "No memory globbing %s\n", fname);
 
-        case GLOB_NOSPACE:
-            globfree(&globbuf);
-            cancel(C_GLOB_ALLOC, "No memory globbing %s\n", fname);
+            case GLOB_ABORTED:
+                globfree(&globbuf);
+                cancel(C_GLOB_ABORT, "Read error while globbing %s\n", fname);
 
-        case GLOB_ABORTED:
-            globfree(&globbuf);
-            cancel(C_GLOB_ABORT, "Read error while globbing %s\n", fname);
+            case GLOB_NOMATCH:
+                globfree(&globbuf);
+                cancel(C_GLOB_NONE, "No files found matching %s\n", fname);
 
-        case GLOB_NOMATCH:
-            globfree(&globbuf);
-            cancel(C_GLOB_NONE, "No files found matching %s\n", fname);
+            default:
+                globfree(&globbuf);
+                cancel(C_GLOB_UNEXPECTED, "Unexpected error globbing %s, internal result: %s\n", fname, strerror(errno));
+        }
 
-        default:
-            globfree(&globbuf);
-            cancel(C_GLOB_UNEXPECTED, "Unexpected error globbing %s, internal result: %s\n", fname, strerror(errno));
+        f = fopen(globbuf.gl_pathv[0],"r");
+        if (f == NULL) { globfree(&globbuf); cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno)); }
+        printf("Loading lintel from %s:\n", globbuf.gl_pathv[0]);
+        globfree(&globbuf);
     }
-
-    FILE *f = fopen(globbuf.gl_pathv[0],"r");
-    if (f == NULL) { globfree(&globbuf); cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno)); }
-    printf("Loading lintel from %s:\n", globbuf.gl_pathv[0]);
-    globfree(&globbuf);
+    else
+    {
+        printf("Piping lintel from standard input\n");
+        f = stdin;
+    }
 
     struct xrt_BcdHeader_t header = bcd_check_files(f);
     if (header.files_num == -1) load_raw_lintel(f);
