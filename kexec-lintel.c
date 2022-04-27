@@ -93,6 +93,8 @@ enum cancel_reasons_t
     C_FBDEV_OPEN = 60,
     C_FBDEV_IOCTL,
     C_FBDEV_CLOSE,
+    C_FBDEV_TTYSTAT,
+    C_FBDEV_TTYWRONG,
     C_RMMOD_FAULT = 65,
     C_LINK_READ = 70,
     C_LINK_LONG,
@@ -391,6 +393,22 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
 
     if(flags.rmmod || flags.rmpci || flags.bridgerst)
     {
+        if (tty < 0)
+        {
+            const char active_file[] = "/sys/class/tty/tty0/active";
+            char *active_tty, *endp;
+            struct stat st;
+            if (stat(active_file, &st) != 0) cancel(C_FBDEV_TTYSTAT, "Can't stat() %s (maybe you don't have tty enabled, try -t <N> if you have): %s\n", active_file, strerror(errno));
+            read_sysfs(active_file, &active_tty, NULL);
+            errno = 0;
+            if (!active_tty || strlen(active_tty) < 4 || strncmp(active_tty, "tty", 3) || (tty = strtol(&(active_tty[3]), &endp, 10)) <= 0 || errno || *endp)
+            {
+                free(active_tty);
+                cancel(C_FBDEV_TTYWRONG, "Incorrect data (%s) in %s, can't autodetect active tty. Use -t <N> to specify it\n", active_tty, active_file);
+            }
+            free(active_tty);
+        }
+
         glob_t globbuf;
         switch(glob("/dev/fb*", GLOB_ERR, NULL, &globbuf))
         {
@@ -659,7 +677,7 @@ static void remount_filesystems()
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
-static void usage(const char *argv0, const char *def, int tty)
+static void usage(const char *argv0, const char *def)
 {
     printf("Usage:\n");
     printf("    %s [OPTIONS] [FILE]\n\n", argv0);
@@ -669,9 +687,9 @@ static void usage(const char *argv0, const char *def, int tty)
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
     #ifndef NO_BRIDGE_RESET
-    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of tty%d (has no effect if -b, or all three of -M, -P, and -B are given)\n", tty);
+    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or all three of -M, -P, and -B are given)\n");
     #else
-    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of tty%d (has no effect if -b, or both -M and -P are given)\n", tty);
+    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     #endif
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
@@ -690,7 +708,6 @@ static void usage(const char *argv0, const char *def, int tty)
 
 static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags)
 {
-    int deftty = *tty;
     for(;;)
     {
         int opt = getopt(argc, argv, "h-:t:irbfVMPB");
@@ -738,10 +755,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 cancel(C_OPTARG, "Run %s --help for usage\n", argv[0]);
 
             case 'h':
-                usage(argv[0], def, deftty);
+                usage(argv[0], def);
 
             case '-':
-                if(!strcmp(optarg, "help")) usage(argv[0], def, *tty);
+                if(!strcmp(optarg, "help")) usage(argv[0], def);
                 if(strcmp(optarg, "tty")) cancel(C_OPTARG_LONG, "%s: incorrect long option -- '%s'\nRun %s --help for usage\n", argv[0], optarg, argv[0]);
                 if(optind >= argc) cancel(C_OPTARG, "%s: option requires an argument -- '--tty'\nRun %s --help for usage\n", argv[0], argv[0]);
                 optarg = argv[optind++];
@@ -749,7 +766,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
             case 't':
                 errno = 0;
                 *tty = strtol(optarg, &endp, 0);
-                if (errno || *endp)
+                if (errno || *endp || *tty < 0)
                 {
                     cancel(C_TTY_WRONG, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
@@ -766,7 +783,7 @@ static int open_kexec()
 
 int main(int argc, char *argv[])
 {
-    int tty = 1;
+    int tty = -1;
     struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1 };
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags);
 

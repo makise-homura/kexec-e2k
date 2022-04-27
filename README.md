@@ -24,7 +24,7 @@ kexec-lintel [OPTIONS] [FILE]
 Options:
 
 * `-h`, `--help`: Show help and exit
-* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of tty1 (has no effect if `-b`, or all two or three of `-M`, `-P`, and, if supported, `-B` are given)
+* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if `-b`, or all two or three of `-M`, `-P`, and, if supported, `-B` are given)
 * `-i`: Don't check that IOMMU is off
 * `-r`: Don't check current runlevel
 * `-b`: Don't reset current framebuffer device
