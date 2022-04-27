@@ -534,7 +534,7 @@ static void free_lintel(void)
 struct lintelops
 {
     char *cache;
-    long cachesize;
+    size_t cachesize;
     long fptr;
 
     size_t (*fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
@@ -571,7 +571,7 @@ static void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     struct xrt_BcdHeader_t *subheader = (struct xrt_BcdHeader_t*)((char*)lintel.image + (super_file.init_size - 1) * 512); /* BCD map should be located in the last sector of lintel file */
     if (subheader->signature != LINTEL_BCD_SIGNATURE) cancel(C_SUPER_HEADER, "Can't find BCD signature in super file\n");
     struct xrt_BcdFile_t *files = (struct xrt_BcdFile_t*)((char*)subheader + sizeof(struct xrt_BcdHeader_t));
-    for (int i = 0; i < subheader->files_num; ++i)
+    for (uint32_t i = 0; i < subheader->files_num; ++i)
     {
         if ( files[i].tag == PRIORITY_TAG_KEXEC_JUMPER )
         {
@@ -588,7 +588,7 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
     printf ("File is BCD container (%d files).\n", header.files_num);
 
     struct xrt_BcdFile_t super_file = {0, 0, 0, 0, 0};
-    for (int i = 0; i < header.files_num; ++i)
+    for (uint32_t i = 0; i < header.files_num; ++i)
     {
         struct xrt_BcdFile_t file;
         if (l->fread(&file, sizeof(file), 1, f) != 1) { l->fclose(f); cancel(C_BCD_FILEHEADER, "Can't read file %d header of BCD file, file might be truncated\n"); }
