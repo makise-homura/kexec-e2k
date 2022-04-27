@@ -531,22 +531,35 @@ static void free_lintel(void)
     free(lintel.image);
 }
 
-static void read_lintel(FILE *f, size_t realsize)
+struct lintelops
+{
+    char *cache;
+    long cachesize;
+    long fptr;
+
+    size_t (*fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
+    int (*fseek)(FILE *stream, long offset, int whence);
+    long (*ftell)(FILE *stream);
+    void (*rewind)(FILE *stream);
+    int (*fclose)(FILE *stream);
+};
+
+static void read_lintel(struct lintelops *l, FILE *f, size_t realsize)
 {
     lintel.image_size = realsize; /* Note: this should EXACTLY match the lintel binary size, because it is used to calculate jump address (mcstbug#133402 comment 38) */
     size_t aligned_size = realsize + alignment; aligned_size -= aligned_size % alignment;
-    if (posix_memalign(&lintel.image, alignment, aligned_size)) { fclose(f); cancel(C_FILE_ALLOC, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
+    if (posix_memalign(&lintel.image, alignment, aligned_size)) { l->fclose(f); cancel(C_FILE_ALLOC, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
     atexit(free_lintel);
-    if (fread(lintel.image, lintel.image_size, 1, f) != 1) { fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
+    if (l->fread(lintel.image, lintel.image_size, 1, f) != 1) { l->fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
     printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
-    if(fclose(f)) cancel(C_FILE_CLOSE, "Can't close lintel file\n");
+    if(l->fclose(f)) cancel(C_FILE_CLOSE, "Can't close lintel file\n");
 }
 
-static struct xrt_BcdHeader_t bcd_check_files(FILE *f)
+static struct xrt_BcdHeader_t bcd_check_files(struct lintelops *l, FILE *f)
 {
-    if (fseek(f, 512, SEEK_SET) != 0) { fclose(f); cancel(C_BCD_SEEK, "Can't seek to possible header of file: %s\n", strerror(errno)); }
+    if (l->fseek(f, 512, SEEK_SET) != 0) { l->fclose(f); cancel(C_BCD_SEEK, "Can't seek to possible header of file: %s\n", strerror(errno)); }
     struct xrt_BcdHeader_t header;
-    if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); cancel(C_BCD_HEADER, "Can't read header of lintel file, file might be truncated\n"); }
+    if (l->fread(&header, sizeof(header), 1, f) != 1) { l->fclose(f); cancel(C_BCD_HEADER, "Can't read header of lintel file, file might be truncated\n"); }
     if (header.signature != LINTEL_BCD_SIGNATURE) header.files_num = -1;
     return header;
 }
@@ -570,7 +583,7 @@ static void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     cancel(C_SUPER_JUMPER, "Can't find kexec jumper in super file\n");
 }
 
-static void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
+static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHeader_t header)
 {
     printf ("File is BCD container (%d files).\n", header.files_num);
 
@@ -578,13 +591,13 @@ static void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
     for (int i = 0; i < header.files_num; ++i)
     {
         struct xrt_BcdFile_t file;
-        if (fread(&file, sizeof(file), 1, f) != 1) { fclose(f); cancel(C_BCD_FILEHEADER, "Can't read file %d header of BCD file, file might be truncated\n"); }
+        if (l->fread(&file, sizeof(file), 1, f) != 1) { l->fclose(f); cancel(C_BCD_FILEHEADER, "Can't read file %d header of BCD file, file might be truncated\n"); }
         printf("BCD file %d: /%d, offset %ld blocks, size %ld blocks, init_size %ld blocks, checksum 0x%08x\n", i, file.tag, file.lba, file.size, file.init_size, file.checksum);
 
         if (file.tag == PRIORITY_TAG_LINTEL)
         {
-            if (i != 0) { fclose(f); cancel(C_BCD_ORDER, "Lintel file must be the first one in BCD\n"); }
-            if (file.size > file.init_size) { fclose(f); cancel(C_BCD_READ, "Can't read lintel file from BCD file: file is uninitialized\n"); }
+            if (i != 0) { l->fclose(f); cancel(C_BCD_ORDER, "Lintel file must be the first one in BCD\n"); }
+            if (file.size > file.init_size) { l->fclose(f); cancel(C_BCD_READ, "Can't read lintel file from BCD file: file is uninitialized\n"); }
             super_file.tag = file.tag;
             super_file.lba = file.lba;
             super_file.init_size = file.size; /* Save for future patching in case of kexec jumper exists */
@@ -597,26 +610,90 @@ static void load_bcd_lintel(FILE *f, const struct xrt_BcdHeader_t header)
             break;
         }
     }
-    if (!super_file.size) { fclose(f); cancel(C_BCD_NOTFOUND, "Can't find lintel file in BCD file\n"); }
+    if (!super_file.size) { l->fclose(f); cancel(C_BCD_NOTFOUND, "Can't find lintel file in BCD file\n"); }
 
-    if (fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { fclose(f); cancel(C_BCD_SEEK, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
-    read_lintel(f, 512 * super_file.size);
+    if (l->fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { l->fclose(f); cancel(C_BCD_SEEK, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
+    read_lintel(l, f, 512 * super_file.size);
     if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER) patch_jumper_info(super_file);
 }
 
-static void load_raw_lintel(FILE *f)
+static void load_raw_lintel(struct lintelops *l, FILE *f)
 {
     size_t realsize;
     printf ("File seems to be raw lintel image.\n");
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); cancel(C_FILE_SEEK, "Can't seek lintel file: %s\n", strerror(errno)); }
-    if ((realsize = ftell(f)) == -1) { fclose(f); cancel(C_FILE_TELL, "Can't get file position of lintel file: %s\n", strerror(errno)); }
-    rewind(f);
-    read_lintel(f, realsize);
+    if (l->fseek(f, 0, SEEK_END) != 0) { l->fclose(f); cancel(C_FILE_SEEK, "Can't seek lintel file: %s\n", strerror(errno)); }
+    if ((realsize = l->ftell(f)) == -1) { l->fclose(f); cancel(C_FILE_TELL, "Can't get file position of lintel file: %s\n", strerror(errno)); }
+    l->rewind(f);
+    read_lintel(l, f, realsize);
+}
+
+size_t stdin_fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+    struct lintelops* l = (struct lintelops*)stream;
+    size_t actual_bytes = size * nmemb;
+    size_t newcachesize = l->fptr + actual_bytes;
+    if (l->cachesize < newcachesize)
+    {
+        char *newcache = realloc(l->cache, newcachesize);
+        if(!newcache) return 0;
+        l->cache = newcache;
+        l->cachesize += fread(l->cache + l->cachesize, 1, newcachesize - l->cachesize, stdin);
+        actual_bytes = l->cachesize - l->fptr;
+    }
+    if(ptr && actual_bytes) memcpy(ptr, l->cache + l->fptr, actual_bytes);
+    l->fptr += actual_bytes;
+    return actual_bytes / size;
+}
+
+int stdin_fseek(FILE *stream, long offset, int whence)
+{
+    switch(whence)
+    {
+        case SEEK_SET:
+            ((struct lintelops*)stream)->fptr = offset;
+            break;
+
+        case SEEK_CUR:
+            ((struct lintelops*)stream)->fptr += offset;
+            break;
+
+        case SEEK_END:
+            /* Read by 4k blocks till the end to determine size */
+            while (((struct lintelops*)stream)->fread(NULL, 4096, 1, stream) > 0);
+            break;
+
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+    return 0;
+}
+
+
+long stdin_ftell(FILE *stream)
+{
+    return ((struct lintelops*)stream)->fptr;
+}
+
+void stdin_rewind(FILE *stream)
+{
+    ((struct lintelops*)stream)->fptr = 0;
+}
+
+int stdin_fclose(FILE *stream)
+{
+    /* After fclose(), next reads from stdin would perform as if a new file was opened */
+    free(((struct lintelops*)stream)->cache);
+    ((struct lintelops*)stream)->cachesize = 0;
+    ((struct lintelops*)stream)->cache = NULL;
+    ((struct lintelops*)stream)->fptr = 0;
+    return 0;
 }
 
 static void load_lintel(const char *fname)
 {
     FILE *f;
+    struct lintelops l = { NULL, 0, 0, fread, fseek, ftell, rewind, fclose };
     if(strcmp(fname, "-"))
     {
         /* May be undefined in non-POSIX environments; then we don't expand tilde. */
@@ -661,12 +738,17 @@ static void load_lintel(const char *fname)
     else
     {
         printf("Piping lintel from standard input\n");
-        f = stdin;
+        f = (FILE*)&l;
+        l.fread = stdin_fread;
+        l.fseek = stdin_fseek;
+        l.ftell = stdin_ftell;
+        l.rewind = stdin_rewind;
+        l.fclose = stdin_fclose;
     }
 
-    struct xrt_BcdHeader_t header = bcd_check_files(f);
-    if (header.files_num == -1) load_raw_lintel(f);
-    else load_bcd_lintel(f, header);
+    struct xrt_BcdHeader_t header = bcd_check_files(&l, f);
+    if (header.files_num == -1) load_raw_lintel(&l, f);
+    else load_bcd_lintel(&l, f, header);
 }
 
 static int check_syslog(const char *marker)
