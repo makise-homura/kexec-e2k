@@ -2,6 +2,10 @@ project('kexec-lintel', 'c', meson_version: '>=0.50.0')
 cc = meson.get_compiler('c')
 cc.has_header_symbol('limits.h', 'PATH_MAX', required : true)
 
+if not cc.has_function('strchrnul', prefix: '#include <string.h>', args: '-D_GNU_SOURCE')
+    add_global_arguments('-DNO_STRCHRNUL', language : 'c')
+endif
+
 if not meson.is_cross_build()
     # Assume sizes are ok when cross compiling, because we are unable to check it
     sz_pfile = cc.sizeof('FILE*', prefix: '#include <stdio.h>')

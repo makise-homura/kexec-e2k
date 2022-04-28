@@ -1,3 +1,4 @@
+#define _GNU_SOURCE /* For strchrnul() */
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -139,6 +140,20 @@ struct flags_t
     int bridgerst;
 };
 
+struct lintelops
+{
+    char *cache;
+    size_t cachesize;
+    long fptr;
+
+    size_t (*fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
+    int (*fseek)(FILE *stream, long offset, int whence);
+    long (*ftell)(FILE *stream);
+    void (*rewind)(FILE *stream);
+    int (*fclose)(FILE *stream);
+};
+
+#ifndef AS_INCLUDE /* When used to determine sizeofs, skip all functions */
 static void cancel(int num, const char *fmt, ...)
 {
     va_list ap;
@@ -323,6 +338,14 @@ static void delete_module(const char *name)
     if (syscall(SYS_delete_module, name, O_NONBLOCK) == -1) cancel(C_RMMOD_FAULT, "Can't remove module %s: %s\n", name, strerror(errno));
 }
 
+#ifdef NO_STRCHRNUL
+static char *strchrnul(const char *s, int c)
+{
+    char *r = strchr(s, c);
+    return r ? r : (char*)&s[strlen(s)];
+}
+#endif
+
 static void unbind_vtcon(const char *signature)
 {
     DIR *pdir;
@@ -366,6 +389,7 @@ static void unbind_vtcon(const char *signature)
 
         char *vtcon_name;
         read_sysfs(name, &vtcon_name, pdir);
+        *strchrnul(vtcon_name, '\n') = '\0';
         printf ("Console %s is %s, %s.\n", pdirent->d_name, vtcon_name, bound ? "active" : "inactive");
         correct = (strstr(vtcon_name, signature) != NULL);
         free(vtcon_name);
@@ -527,19 +551,6 @@ static void free_lintel(void)
 {
     free(lintel.image);
 }
-
-struct lintelops
-{
-    char *cache;
-    size_t cachesize;
-    long fptr;
-
-    size_t (*fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
-    int (*fseek)(FILE *stream, long offset, int whence);
-    long (*ftell)(FILE *stream);
-    void (*rewind)(FILE *stream);
-    int (*fclose)(FILE *stream);
-};
 
 static void read_lintel(struct lintelops *l, FILE *f, size_t realsize)
 {
@@ -867,7 +878,6 @@ static int open_kexec()
     return fd;
 }
 
-#ifndef AS_INCLUDE
 int main(int argc, char *argv[])
 {
     int tty = -1;
