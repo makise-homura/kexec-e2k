@@ -407,11 +407,6 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     char pcilnk[PATH_MAX];
     char *pciid;
 
-    if(flags.vtunbind)
-    {
-        unbind_vtcon("frame buffer device");
-    }
-
     if(flags.rmmod || flags.rmpci || flags.bridgerst)
     {
         if (tty < 0)
@@ -422,10 +417,12 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
             if (stat(active_file, &st) != 0) cancel(C_FBDEV_TTYSTAT, "Can't stat() %s (maybe you don't have tty enabled, try -t <N> if you have): %s\n", active_file, strerror(errno));
             read_sysfs(active_file, &active_tty, NULL);
             errno = 0;
-            if (!active_tty || strlen(active_tty) < 4 || strncmp(active_tty, "tty", 3) || (tty = strtol(&(active_tty[3]), &endp, 10)) <= 0 || errno || *endp != '\n')
+            *strchrnul(active_tty, '\n') = '\0';
+            printf("Active tty: %s\n", active_tty);
+            if (!active_tty || strlen(active_tty) < 4 || strncmp(active_tty, "tty", 3) || (tty = strtol(&(active_tty[3]), &endp, 10)) <= 0 || errno || *endp)
             {
                 free(active_tty);
-                cancel(C_FBDEV_TTYWRONG, "Incorrect data (%s) in %s, can't autodetect active tty. Use -t <N> to specify it\n", active_tty, active_file);
+                cancel(C_FBDEV_TTYWRONG, "Incorrect data in %s, can't autodetect active tty. Use -t <N> to specify it\n", active_file);
             }
             free(active_tty);
         }
@@ -454,6 +451,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
                 cancel(C_FBGLOB_UNEXPECTED, "Unexpected error looking for framebuffers, internal result: %s\n", strerror(errno));
         }
 
+        printf("Detecting active framebuffer device for tty%d by %s...\n", tty, globbuf.gl_pathv[0]);
         int fb = con2fbmap(tty, &globbuf);
 
         if (fb == -1)
@@ -475,6 +473,10 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         }
     }
 
+    if(flags.vtunbind)
+    {
+        unbind_vtcon("frame buffer device");
+    }
 
     if(flags.rmmod)
     {
