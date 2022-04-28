@@ -144,7 +144,7 @@ struct lintelops
 {
     char *cache;
     size_t cachesize;
-    long fptr;
+    size_t fptr;
 
     size_t (*fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
     int (*fseek)(FILE *stream, long offset, int whence);
@@ -646,6 +646,7 @@ size_t stdin_fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
         if(!newcache) return 0;
         l->cache = newcache;
         l->cachesize += fread(l->cache + l->cachesize, 1, newcachesize - l->cachesize, stdin);
+        if(l->cachesize < l->fptr) return 0;
         actual_bytes = l->cachesize - l->fptr;
     }
     if(ptr && actual_bytes) memcpy(ptr, l->cache + l->fptr, actual_bytes);
@@ -655,24 +656,26 @@ size_t stdin_fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
 
 int stdin_fseek(FILE *stream, long offset, int whence)
 {
+    struct lintelops *l = (struct lintelops*)stream;
     switch(whence)
     {
         case SEEK_SET:
-            ((struct lintelops*)stream)->fptr = offset;
+            if (offset < 0) { errno = EINVAL; return -1; }
+            l->fptr = offset;
             break;
 
         case SEEK_CUR:
-            ((struct lintelops*)stream)->fptr += offset;
+            if (offset + (long)l->fptr < 0) { errno = EINVAL; return -1; }
+            l->fptr += offset;
             break;
 
         case SEEK_END:
             /* Read by 4k blocks till the end to determine size */
-            while (((struct lintelops*)stream)->fread(NULL, 4096, 1, stream) > 0);
+            while (l->fread(NULL, 4096, 1, stream) > 0);
             break;
 
         default:
-            errno = EINVAL;
-            return -1;
+            errno = EINVAL; return -1;
     }
     return 0;
 }
