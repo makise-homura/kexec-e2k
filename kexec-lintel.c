@@ -85,9 +85,6 @@ enum cancel_reasons_t
     C_TTY_WRONG,
     C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
-    C_SYSRQ_OPEN = 50,
-    C_SYSRQ_WRITE,
-    C_SYSRQ_CLOSE,
     C_IOMMU_ENABLED = 55,
     C_IOMMU_STAT,
     C_FBDEV_OPEN = 60,
@@ -761,10 +758,8 @@ static int check_syslog(const char *marker)
 
 static void remount_filesystems()
 {
-    FILE *f = fopen("/proc/sysrq-trigger","w");
-    if (f == NULL) cancel(C_SYSRQ_OPEN, "Can't open sysrq-trigger file: %s\n", strerror(errno));
-    if (fprintf(f, "u\n") < 1) { fclose(f); cancel(C_SYSRQ_WRITE, "Can't write to sysrq-trigger file\n"); }
-    if (fclose(f)) cancel(C_SYSRQ_CLOSE, "Can't close sysrq-trigger file: %s\n", strerror(errno));
+    write_sysfs("/proc/sys/kernel/printk","7\n");
+    write_sysfs("/proc/sysrq-trigger","u\n");
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
@@ -913,7 +908,7 @@ int main(int argc, char *argv[])
 
     if (flags.fsflush)
     {
-        printf("Note: you should remount everything back to rw to bring system back to work\n");
+        printf("Note: you should at least remount everything back to rw to bring system back to work\n");
     }
 }
 #endif
