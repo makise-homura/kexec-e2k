@@ -398,7 +398,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
             if (stat(active_file, &st) != 0) cancel(C_FBDEV_TTYSTAT, "Can't stat() %s (maybe you don't have tty enabled, try -t <N> if you have): %s\n", active_file, strerror(errno));
             read_sysfs(active_file, &active_tty, NULL);
             errno = 0;
-            if (!active_tty || strlen(active_tty) < 4 || strncmp(active_tty, "tty", 3) || (tty = strtol(&(active_tty[3]), &endp, 10)) <= 0 || errno || *endp)
+            if (!active_tty || strlen(active_tty) < 4 || strncmp(active_tty, "tty", 3) || (tty = strtol(&(active_tty[3]), &endp, 10)) <= 0 || errno || *endp != '\n')
             {
                 free(active_tty);
                 cancel(C_FBDEV_TTYWRONG, "Incorrect data (%s) in %s, can't autodetect active tty. Use -t <N> to specify it\n", active_tty, active_file);
