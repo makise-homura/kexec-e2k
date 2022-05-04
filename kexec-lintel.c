@@ -539,6 +539,7 @@ static void check_runlevel(void)
     struct utmpx *ut;
 
     setutxent();
+    errno = 0;
     while ((ut = getutxent()) != NULL)
     {
         if (ut->ut_type == RUN_LVL)
@@ -551,7 +552,7 @@ static void check_runlevel(void)
 
     if (runlevel < 0)
     {
-        if (errno) cancel(C_RUNLEVEL_FAIL, "Can't get current runlevel: %s\n", strerror(errno));
+        if (errno && errno != ENOENT) cancel(C_RUNLEVEL_FAIL, "Can't get current runlevel: %s\n", strerror(errno));
 
         char *initstr;
         read_sysfs("/proc/1/cmdline",&initstr,NULL);
