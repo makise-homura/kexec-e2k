@@ -14,7 +14,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/stat.h>
+#include <sys/mount.h>
 #include <sys/klog.h>
 #include <sys/ioctl.h>
 #include <linux/fb.h>
@@ -73,6 +73,8 @@ enum cancel_reasons_t
     C_FILE_CLOSE,
     C_DEV_OPEN = 20,
     C_DEV_IOCTL,
+    C_MOUNTS_STAT = 22,
+    C_MOUNTS_MOUNT,
     C_RUNLEVEL_NONE = 25,
     C_RUNLEVEL_WRONG,
     C_BCD_HEADER = 30,
@@ -130,6 +132,7 @@ enum cancel_reasons_t
 
 struct flags_t
 {
+    int mounts;
     int iommu;
     int runlevel;
     int resetfb;
@@ -682,7 +685,6 @@ int stdin_fseek(FILE *stream, long offset, int whence)
     return 0;
 }
 
-
 long stdin_ftell(FILE *stream)
 {
     return ((struct lintelops*)stream)->fptr;
@@ -793,6 +795,7 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     #endif
+    printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
     printf("        -b:           Don't reset current framebuffer device\n");
@@ -812,7 +815,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 {
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:irbfVMPB");
+        int opt = getopt(argc, argv, "h-:t:mirbfVMPB");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -821,6 +824,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
         char *endp;
         switch(opt)
         {
+            case 'm':
+                flags->mounts = 0;
+                break;
+
             case 'i':
                 flags->iommu = 0;
                 break;
@@ -883,11 +890,40 @@ static int open_kexec()
     return fd;
 }
 
+static int get_dev(const char *path)
+{
+    struct stat st;
+    if(stat(path, &st) == -1) cancel(C_MOUNTS_STAT, "Can't stat mountpoint %s: %s\n", path, strerror(errno));
+    return st.st_dev;
+}
+
+static void try_mount(const char *src, const char *tgt)
+{
+    printf("Filesystem %s (%s) is not mounted, trying to fix it...\n", tgt, src);
+    if (mount(src, tgt, src, 0, NULL) != 0) cancel(C_MOUNTS_MOUNT, "Can't mount %s: %s\n", tgt, strerror(errno));
+}
+
+static void check_mountpoints()
+{
+    int dev_root = get_dev("/");
+    int dev_dev  = get_dev("/dev");
+    int dev_sys  = get_dev("/sys");
+    int dev_proc = get_dev("/proc");
+    if (dev_root == dev_dev)  try_mount("devtmpfs", "/dev");
+    if (dev_root == dev_sys)  try_mount("sysfs", "/sys");
+    if (dev_root == dev_proc) try_mount("proc", "/proc");
+}
+
 int main(int argc, char *argv[])
 {
     int tty = -1;
-    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1 };
+    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags);
+
+    if (flags.mounts)
+    {
+        check_mountpoints();
+    }
 
     if (flags.iommu)
     {
