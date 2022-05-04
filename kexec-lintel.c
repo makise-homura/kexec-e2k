@@ -77,6 +77,7 @@ enum cancel_reasons_t
     C_MOUNTS_MOUNT,
     C_RUNLEVEL_NONE = 25,
     C_RUNLEVEL_WRONG,
+    C_RUNLEVEL_FAIL,
     C_BCD_HEADER = 30,
     C_BCD_FILEHEADER,
     C_BCD_ORDER,
@@ -189,7 +190,7 @@ static char *quick_basename(char *arg)
     /* We could have used libgen.h or string.h implementation, but it's unreliable which one we get. So we implement it on our own. */
     int l = strlen(arg);
     if (l == 0) return NULL;
-    if (l > 0 && arg[l] == '/') arg[l] = '\0';
+    if (l > 0 && arg[l - 1] == '/') arg[l - 1] = '\0';
 
     char *parg = strrchr(arg, '/');
     if (parg == NULL) return arg;
@@ -548,7 +549,28 @@ static void check_runlevel(void)
     }
     endutxent();
 
-    if (runlevel < 0) cancel(C_RUNLEVEL_NONE, "Can't get current runlevel: %s\n", errno ? strerror(errno) : "No RUN_LVL entry in utmp file");
+    if (runlevel < 0)
+    {
+        if (errno) cancel(C_RUNLEVEL_FAIL, "Can't get current runlevel: %s\n", strerror(errno));
+
+        char *initstr;
+        read_sysfs("/proc/1/cmdline",&initstr,NULL);
+        *strchrnul(initstr, ' ') = '\0';
+        char *init = quick_basename(initstr);
+        /* Feel free to add any other shell you may somehow use as init in your boot config and make a pull request with that change. */
+        if (!strcmp(init, "bash") || !strcmp(init, "csh") || !strcmp(init, "sh") || !strcmp(init, "zsh") || !strcmp(init, "rbash") || !strcmp(init, "sh4") || !strcmp(init, "bash4") || !strcmp(init, "rbash4"))
+        {
+            printf("Init process is a simple shell (%s), assuming we are in runlevel 1.\n", init);
+            free(initstr);
+            return;
+        }
+        else
+        {
+            free(initstr);
+            cancel(C_RUNLEVEL_NONE, "Can't get current runlevel: no RUN_LVL entry in utmp file\n");
+        }
+    }
+
     if (runlevel != 1) cancel(C_RUNLEVEL_WRONG, "You should run this only from runlevel 1, but current runlevel is %d\n", runlevel);
 }
 
