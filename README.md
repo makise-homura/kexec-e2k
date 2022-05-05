@@ -29,14 +29,19 @@ Options:
 
 * `-h`, `--help`: Show help and exit
 * `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if `-b`, or all two or three of `-M`, `-P`, and, if supported, `-B` are given)
+* `-d <N>`: Avoid interactivity and unconditionally boot guest OS from Nth disk drive
+* `-T`: Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if `-d` is given)
+* `-m`: Don't check for unmounted filesystems and don't mount them
 * `-i`: Don't check that IOMMU is off
 * `-r`: Don't check current runlevel
 * `-b`: Don't reset current framebuffer device
 * `-f`: Don't sync, flush, and remount-read-only filesystems
+* `-v`: Don't pass current video adapter id to lintel and make it use the one specified in NVRAM
 * `-V`: Don't unbing currently active vtconsole (has no effect if `-b` is given)
 * `-M`: Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if `-b` is given)
 * `-P`: Don't remove PCI Express device implementing current framebuffer (has no effect if `-b` is given)
 * `-B`: Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if `-b` is given)
+* `-x`: Don't perform actual kexec_lintel but everything preceeding it
 
 Option `-B` is supported only if built with `libpci`; if not, option is silently skipped and binary acts as if it is always enabled.
 
