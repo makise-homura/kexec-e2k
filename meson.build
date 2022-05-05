@@ -2,6 +2,10 @@ project('kexec-lintel', 'c', meson_version: '>=0.50.0')
 cc = meson.get_compiler('c')
 cc.has_header_symbol('limits.h', 'PATH_MAX', required : true)
 
+if not cc.has_function_attribute('packed')
+    error('Your compiler does not support __attribute__((packed)), can not build here.')
+endif
+
 if not cc.has_function('strchrnul', prefix: '#include <string.h>', args: '-D_GNU_SOURCE')
     add_global_arguments('-DNO_STRCHRNUL', language : 'c')
 endif

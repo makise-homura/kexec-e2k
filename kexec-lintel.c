@@ -86,9 +86,11 @@ enum cancel_reasons_t
     C_BCD_SEEK,
     C_OPTARG = 40,
     C_OPTARG_LONG,
-    C_TTY_WRONG,
+    C_OPTARG_WRONG_TTY,
+    C_OPTARG_WRONG_DISK,
     C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
+    C_VGA_PCI = 50,
     C_IOMMU_ENABLED = 55,
     C_IOMMU_STAT,
     C_FBDEV_OPEN = 60,
@@ -142,7 +144,25 @@ struct flags_t
     int rmmod;
     int rmpci;
     int bridgerst;
+    int kexec;
+    int trusted;
+    int setvideo;
+    int disknumber;
 };
+
+struct kexec_info_t
+{
+    uint32_t signature;
+    uint32_t version;
+    uint32_t size;
+    uint32_t interactive;
+    uint32_t boot_disk_num;
+    uint32_t vga_pci_addr_node;
+    uint32_t vga_pci_addr_bus;
+    uint32_t vga_pci_addr_slot;
+    uint32_t vga_pci_addr_func;
+    uint32_t reserved[119]; /* total 128 uint32_t's */
+} __attribute__((packed));
 
 struct lintelops
 {
@@ -277,6 +297,32 @@ static void write_sysfs(const char *file, const char *buf)
     if(close(fd) == -1) cancel(C_SYSFS_CLOSEWRITE, "Can't close %s opened for writing: %s\n", file, strerror(errno));
 }
 
+static void parse_pci_id(const char *context, char *pciid, uint32_t *domain, uint32_t *bus, uint32_t *dev, uint32_t *func)
+{
+    char *s, *endp;
+    errno = 0;
+
+    s = strtok(pciid, ":.");
+    if (s == NULL) cancel(C_PCI_DOMAIN_NONE, "Can't recognize domain id %s.\n", context);
+    *domain = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(C_PCI_DOMAIN_WRONG, "Malformed domain id %s.\n", context);
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(C_PCI_BUS_NONE, "Can't recognize bus id %s.\n", context);
+    *bus = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(C_PCI_BUS_WRONG, "Malformed bus id %s.\n", context);
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(C_PCI_DEV_NONE, "Can't recognize dev id %s.\n", context);
+    *dev = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(C_PCI_DEV_WRONG, "Malformed dev id %s.\n", context);
+
+    s = strtok(NULL, ":.");
+    if (s == NULL) cancel(C_PCI_FUNC_NONE, "Can't recognize func id %s.\n", context);
+    *func = strtol(s, &endp, 16);
+    if (errno || *endp) cancel(C_PCI_FUNC_WRONG, "Malformed func id %s.\n", context);
+}
+
 #ifndef NO_BRIDGE_RESET
 static char *quick_dirname(char *arg)
 {
@@ -290,36 +336,10 @@ static char *quick_dirname(char *arg)
     return arg;
 }
 
-static void parse_pci_id(char *pciid, int *domain, int *bus, int *dev, int *func)
-{
-    char *s, *endp;
-    errno = 0;
-
-    s = strtok(pciid, ":.");
-    if (s == NULL) cancel(C_PCI_DOMAIN_NONE, "Can't recognize domain id for the bridge.\n");
-    *domain = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(C_PCI_DOMAIN_WRONG, "Malformed domain id for the bridge.\n");
-
-    s = strtok(NULL, ":.");
-    if (s == NULL) cancel(C_PCI_BUS_NONE, "Can't recognize bus id for the bridge.\n");
-    *bus = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(C_PCI_BUS_WRONG, "Malformed bus id for the bridge.\n");
-
-    s = strtok(NULL, ":.");
-    if (s == NULL) cancel(C_PCI_DEV_NONE, "Can't recognize dev id for the bridge.\n");
-    *dev = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(C_PCI_DEV_WRONG, "Malformed dev id for the bridge.\n");
-
-    s = strtok(NULL, ":.");
-    if (s == NULL) cancel(C_PCI_FUNC_NONE, "Can't recognize func id for the bridge.\n");
-    *func = strtol(s, &endp, 16);
-    if (errno || *endp) cancel(C_PCI_FUNC_WRONG, "Malformed func id for the bridge.\n");
-}
-
 static void bridge_reset(char *pciid)
 {
-    int domain, bus, dev, func;
-    parse_pci_id(pciid, &domain, &bus, &dev, &func);
+    uint32_t domain, bus, dev, func;
+    parse_pci_id("for the bridge", pciid, &domain, &bus, &dev, &func);
 
     /* libpci seems to have error handling undocumented; so we skip it here. */
     struct pci_access *pacc = pci_alloc();
@@ -619,7 +639,30 @@ static void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     cancel(C_SUPER_JUMPER, "Can't find kexec jumper in super file\n");
 }
 
-static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHeader_t header)
+static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_info_t *target)
+{
+    if (target->signature == 0x61746164)
+    {
+        switch(target->version)
+        {
+            case 0x01000000:
+                memset(&(((uint32_t*)target)[3]), 0xff, target->size - 3 * sizeof(uint32_t));
+                target->interactive       = source->interactive;
+                target->boot_disk_num     = source->boot_disk_num;
+                target->vga_pci_addr_node = source->vga_pci_addr_node;
+                target->vga_pci_addr_bus  = source->vga_pci_addr_bus;
+                target->vga_pci_addr_slot = source->vga_pci_addr_slot;
+                target->vga_pci_addr_func = source->vga_pci_addr_func;
+                break;
+
+            default:
+                printf("Kexec jumper contains kexec_info structure of unsupported version, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+        }
+    }
+    else printf("Kexec jumper does not contain kexec_info structure, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+}
+
+static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHeader_t header, const struct kexec_info_t *kexec_info)
 {
     printf ("File is BCD container (%d files).\n", header.files_num);
 
@@ -650,13 +693,21 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
 
     if (l->fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { l->fclose(f); cancel(C_BCD_SEEK, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
     read_lintel(l, f, 512 * super_file.size);
-    if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER) patch_jumper_info(super_file);
+    if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER)
+    {
+        patch_jumper_info(super_file);
+        inject_kexec_info(kexec_info, (struct kexec_info_t *)(lintel.image + 512 * (super_file.size - 1)));
+    }
+    else
+    {
+        printf("BCD file does not contain kexec jumper, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+    }
 }
 
 static void load_raw_lintel(struct lintelops *l, FILE *f)
 {
     size_t realsize;
-    printf ("File seems to be raw lintel image.\n");
+    printf ("File seems to be raw lintel image, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
     if (l->fseek(f, 0, SEEK_END) != 0) { l->fclose(f); cancel(C_FILE_SEEK, "Can't seek lintel file: %s\n", strerror(errno)); }
     if ((realsize = l->ftell(f)) == -1) { l->fclose(f); cancel(C_FILE_TELL, "Can't get file position of lintel file: %s\n", strerror(errno)); }
     l->rewind(f);
@@ -728,7 +779,7 @@ int stdin_fclose(FILE *stream)
     return 0;
 }
 
-static void load_lintel(const char *fname)
+static void load_lintel(const char *fname, const struct kexec_info_t *kexec_info)
 {
     FILE *f;
     struct lintelops l = { NULL, 0, 0, fread, fseek, ftell, rewind, fclose };
@@ -786,7 +837,7 @@ static void load_lintel(const char *fname)
 
     struct xrt_BcdHeader_t header = bcd_check_files(&l, f);
     if (header.files_num == -1) load_raw_lintel(&l, f);
-    else load_bcd_lintel(&l, f, header);
+    else load_bcd_lintel(&l, f, header, kexec_info);
 }
 
 static int check_syslog(const char *marker)
@@ -818,11 +869,14 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     #endif
+    printf("        -d N:         Avoid interactivity and unconditionally boot guest OS from Nth disk drive\n");
+    printf("        -T:           Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if -d is given)\n");
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
     printf("        -b:           Don't reset current framebuffer device\n");
     printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
+    printf("        -v:           Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM\n");
     printf("        -V:           Don't unbing currently active vtconsole (has no effect if -b is given)\n");
     printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
@@ -831,6 +885,7 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -B:           Ignored (this build does never reset PCI bridge associated with PCI Express device implementing current framebuffer)\n");
     #endif
+    printf("        -x:           Don't perform actual kexec_lintel but everything preceeding it\n");
     exit(C_SUCCESS);
 }
 
@@ -838,7 +893,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 {
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:mirbfVMPB");
+        int opt = getopt(argc, argv, "h-:t:d:TmirbfvVMPBx");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -847,6 +902,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
         char *endp;
         switch(opt)
         {
+            case 'T':
+                flags->trusted = 1;
+                break;
+
             case 'm':
                 flags->mounts = 0;
                 break;
@@ -867,6 +926,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 flags->fsflush = 0;
                 break;
 
+            case 'v':
+                flags->setvideo = 0;
+                break;
+
             case 'V':
                 flags->vtunbind = 0;
                 break;
@@ -881,6 +944,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 
             case 'B':
                 flags->bridgerst = 0;
+                break;
+
+            case 'x':
+                flags->kexec = 0;
                 break;
 
             case '?':
@@ -900,7 +967,15 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 *tty = strtol(optarg, &endp, 0);
                 if (errno || *endp || *tty < 0)
                 {
-                    cancel(C_TTY_WRONG, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
+                    cancel(C_OPTARG_WRONG_TTY, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
+                }
+
+            case 'd':
+                errno = 0;
+                flags->disknumber = strtol(optarg, &endp, 0);
+                if (errno || *endp || flags->disknumber < 0)
+                {
+                    cancel(C_OPTARG_WRONG_DISK, "%s: malformed disk number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
         }
     }
@@ -939,8 +1014,11 @@ static void check_mountpoints()
 
 int main(int argc, char *argv[])
 {
+
     int tty = -1;
-    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, -1 };
+    struct kexec_info_t kexec_info;
+    memset(&kexec_info, 0xff, sizeof(kexec_info));
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags);
 
     if (flags.mounts)
@@ -958,7 +1036,36 @@ int main(int argc, char *argv[])
         check_runlevel();
     }
 
-    load_lintel(fname);
+    if (flags.setvideo)
+    {
+        char *vgaarb;
+        read_sysfs("/dev/vga_arbiter", &vgaarb, NULL);
+        if(!strncmp(vgaarb, "invalid", 7))
+        {
+            printf("VGA arbiter has no idea of which video card is active, lintel will boot on the last saved one.\n");
+        }
+        else
+        {
+            char *pcidev = strstr(vgaarb, "PCI:");
+            if (pcidev == NULL) { free(vgaarb); cancel(C_VGA_PCI, "Can't find PCI device signature in VGA arbiter response\n"); }
+            pcidev += 4;
+            *strchrnul(pcidev, ',') = '\0';
+            parse_pci_id("of current VGA card", pcidev, &kexec_info.vga_pci_addr_node, &kexec_info.vga_pci_addr_bus, &kexec_info.vga_pci_addr_slot, &kexec_info.vga_pci_addr_func);
+            printf("Active VGA card to boot lintel on is %04x:%02x:%02x:%02x.\n", kexec_info.vga_pci_addr_node, kexec_info.vga_pci_addr_bus, kexec_info.vga_pci_addr_slot, kexec_info.vga_pci_addr_func);
+        }
+        free(vgaarb);
+    }
+
+    if (flags.disknumber >= 0)
+    {
+        kexec_info.boot_disk_num = flags.disknumber;
+        if (flags.trusted)
+        {
+            kexec_info.interactive = 0;
+        }
+    }
+
+    load_lintel(fname, &kexec_info);
 
     if (flags.resetfb)
     {
@@ -971,6 +1078,11 @@ int main(int argc, char *argv[])
         printf("Flushing filesystems...\n");
         sync();
         remount_filesystems();
+    }
+
+    if (!flags.kexec)
+    {
+        return 0;
     }
 
     printf("Rebooting to lintel...\n");
