@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/mount.h>
 #include <sys/klog.h>
 #include <sys/ioctl.h>
@@ -102,6 +103,9 @@ enum cancel_reasons_t
     C_LINK_READ = 70,
     C_LINK_LONG,
     C_PATH_LONG = 75,
+    C_DISKDEV_NONATA = 76,
+    C_DISKDEV_WRONGPORT,
+    C_DISKDEV_WRONGNODE,
     C_SYSFS_STAT = 80,
     C_SYSFS_ALLOC,
     C_SYSFS_OPENWRITE,
@@ -145,10 +149,13 @@ struct flags_t
     int rmpci;
     int bridgerst;
     int kexec;
-    int trusted;
+    int untrusted;
     int setvideo;
-    int disknumber;
+    int askfordisk;
+    int chkdisknode;
 };
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+
 
 struct kexec_info_t
 {
@@ -156,12 +163,18 @@ struct kexec_info_t
     uint32_t version;
     uint32_t size;
     uint32_t interactive;
-    uint32_t boot_disk_num;
+    uint32_t boot_disk_pci_addr_node;
+    uint32_t boot_disk_pci_addr_bus;
+    uint32_t boot_disk_pci_addr_slot;
+    uint32_t boot_disk_pci_addr_func;
+    uint32_t boot_disk_sata_port;
     uint32_t vga_pci_addr_node;
     uint32_t vga_pci_addr_bus;
     uint32_t vga_pci_addr_slot;
     uint32_t vga_pci_addr_func;
-    uint32_t reserved[119]; /* total 128 uint32_t's */
+    /* RFU: type_t eth_emul_regime; */
+    /* RFU: type_t eth_enabled_num; */
+    uint32_t reserved[115]; /* total 128 uint32_t's */
 } __attribute__((packed));
 
 struct lintelops
@@ -544,6 +557,37 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     #endif
 }
 
+static void fill_disk_data(struct kexec_info_t *kexec_info, dev_t dev, int chkdisknode)
+{
+    char blklink[PATH_MAX];
+    char blkabsdev[PATH_MAX];
+    path_snprintf(blklink, "Block device sysfs link", "/sys/dev/block/%d:%d", major(dev), minor(dev));
+    path_readlink(blklink, blkabsdev);
+    char *ataport = strstr(blkabsdev, "/ata");
+    if (ataport == NULL) cancel(C_DISKDEV_NONATA, "Device %s is not an ATA device.\n", blklink);
+    *ataport++ = '\0';
+    *strchrnul(ataport, '/') = '\0';
+    char *pcidev = quick_basename(blkabsdev);
+
+    char portfile[PATH_MAX];
+    path_snprintf(portfile, "Block device sysfs port number", "/sys/bus/pci/devices/%s/%s/ata_port/%s/port_no", pcidev, ataport, ataport);
+    char *portnum, *endp;
+    read_sysfs(portfile, &portnum, NULL);
+    errno = 0;
+    *strchrnul(portnum, '\n') = '\0';
+    if ((kexec_info->boot_disk_sata_port = strtol(portnum, &endp, 10)) <= 0 || errno || *endp)
+    {
+        free(portnum);
+        cancel(C_DISKDEV_WRONGPORT, "Incorrect data in %s (%s). Should usually be 1 to 4 (or more on modern controllers)\n", portfile, portnum);
+    }
+    free(portnum);
+
+    --kexec_info->boot_disk_sata_port;
+    parse_pci_id("for the boot drive PCI device", pcidev, &kexec_info->boot_disk_pci_addr_node, &kexec_info->boot_disk_pci_addr_bus, &kexec_info->boot_disk_pci_addr_slot, &kexec_info->boot_disk_pci_addr_func);
+    if (chkdisknode && kexec_info->boot_disk_pci_addr_node > 0) cancel(C_DISKDEV_WRONGNODE, "AHCI controller of boot drive should be on CPU 0, not %d.\n", kexec_info->boot_disk_pci_addr_node);
+    printf("Requested boot from AHCI controller %04x:%02x:%02x.%x, port %d.\n", kexec_info->boot_disk_pci_addr_node, kexec_info->boot_disk_pci_addr_bus, kexec_info->boot_disk_pci_addr_slot, kexec_info->boot_disk_pci_addr_func, kexec_info->boot_disk_sata_port);
+}
+
 static void check_iommu(void)
 {
     /* Current kernels don't allow lintel to detect devices if IOMMU is enabled. */
@@ -647,12 +691,16 @@ static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_in
         {
             case 0x01000000:
                 memset(&(((uint32_t*)target)[3]), 0xff, target->size - 3 * sizeof(uint32_t));
-                target->interactive       = source->interactive;
-                target->boot_disk_num     = source->boot_disk_num;
-                target->vga_pci_addr_node = source->vga_pci_addr_node;
-                target->vga_pci_addr_bus  = source->vga_pci_addr_bus;
-                target->vga_pci_addr_slot = source->vga_pci_addr_slot;
-                target->vga_pci_addr_func = source->vga_pci_addr_func;
+                target->interactive             = source->interactive;
+                target->boot_disk_pci_addr_node = source->boot_disk_pci_addr_node;
+                target->boot_disk_pci_addr_bus  = source->boot_disk_pci_addr_bus;
+                target->boot_disk_pci_addr_slot = source->boot_disk_pci_addr_slot;
+                target->boot_disk_pci_addr_func = source->boot_disk_pci_addr_func;
+                target->boot_disk_sata_port     = source->boot_disk_sata_port;
+                target->vga_pci_addr_node       = source->vga_pci_addr_node;
+                target->vga_pci_addr_bus        = source->vga_pci_addr_bus;
+                target->vga_pci_addr_slot       = source->vga_pci_addr_slot;
+                target->vga_pci_addr_func       = source->vga_pci_addr_func;
                 break;
 
             default:
@@ -869,15 +917,16 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     #endif
-    printf("        -d N:         Avoid interactivity and unconditionally boot guest OS from Nth disk drive\n");
+    printf("        -d DEVNAME:   Avoid asking for boot drive and boot guest OS from DEVNAME (e.g. /dev/sdc) by default\n");
     printf("        -T:           Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if -d is given)\n");
+    printf("        -n:           Don't check that boot disk AHCI controller is on node 0 (has an effect only if -d is given)\n");
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
     printf("        -b:           Don't reset current framebuffer device\n");
     printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
     printf("        -v:           Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM\n");
-    printf("        -V:           Don't unbing currently active vtconsole (has no effect if -b is given)\n");
+    printf("        -V:           Don't unbind currently active vtconsole (has no effect if -b is given)\n");
     printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     #ifndef NO_BRIDGE_RESET
@@ -889,11 +938,11 @@ static void usage(const char *argv0, const char *def)
     exit(C_SUCCESS);
 }
 
-static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags)
+static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags, dev_t *disk)
 {
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:d:TmirbfvVMPBx");
+        int opt = getopt(argc, argv, "h-:t:d:TnmirbfvVMPBx");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -903,7 +952,11 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
         switch(opt)
         {
             case 'T':
-                flags->trusted = 1;
+                flags->untrusted = 0;
+                break;
+
+            case 'n':
+                flags->chkdisknode = 0;
                 break;
 
             case 'm':
@@ -950,6 +1003,16 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 flags->kexec = 0;
                 break;
 
+            case 'd':
+                flags->askfordisk = 0;
+                struct stat st;
+                if (stat(optarg, &st))
+                {
+                    cancel(C_OPTARG_WRONG_DISK, "%s: can't stat device %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
+                }
+                *disk = st.st_rdev;
+                break;
+
             case '?':
                 cancel(C_OPTARG, "Run %s --help for usage\n", argv[0]);
 
@@ -970,13 +1033,6 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                     cancel(C_OPTARG_WRONG_TTY, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
 
-            case 'd':
-                errno = 0;
-                flags->disknumber = strtol(optarg, &endp, 0);
-                if (errno || *endp || flags->disknumber < 0)
-                {
-                    cancel(C_OPTARG_WRONG_DISK, "%s: malformed disk number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
-                }
         }
     }
 }
@@ -1016,10 +1072,11 @@ int main(int argc, char *argv[])
 {
 
     int tty = -1;
-    struct flags_t flags = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, -1 };
+    struct flags_t flags = DEFAULT_FLAGS;
     struct kexec_info_t kexec_info;
+    dev_t disk;
     memset(&kexec_info, 0xff, sizeof(kexec_info));
-    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags);
+    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags, &disk);
 
     if (flags.mounts)
     {
@@ -1051,15 +1108,15 @@ int main(int argc, char *argv[])
             pcidev += 4;
             *strchrnul(pcidev, ',') = '\0';
             parse_pci_id("of current VGA card", pcidev, &kexec_info.vga_pci_addr_node, &kexec_info.vga_pci_addr_bus, &kexec_info.vga_pci_addr_slot, &kexec_info.vga_pci_addr_func);
-            printf("Active VGA card to boot lintel on is %04x:%02x:%02x:%02x.\n", kexec_info.vga_pci_addr_node, kexec_info.vga_pci_addr_bus, kexec_info.vga_pci_addr_slot, kexec_info.vga_pci_addr_func);
+            printf("Active VGA card to boot lintel on is %04x:%02x:%02x.%x.\n", kexec_info.vga_pci_addr_node, kexec_info.vga_pci_addr_bus, kexec_info.vga_pci_addr_slot, kexec_info.vga_pci_addr_func);
         }
         free(vgaarb);
     }
 
-    if (flags.disknumber >= 0)
+    if (!flags.askfordisk)
     {
-        kexec_info.boot_disk_num = flags.disknumber;
-        if (flags.trusted)
+        fill_disk_data(&kexec_info, disk, flags.chkdisknode);
+        if (!flags.untrusted)
         {
             kexec_info.interactive = 0;
         }
