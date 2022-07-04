@@ -54,7 +54,7 @@ message('Kernel command line length: ' + cmdline_length.to_string())
 if not meson.is_cross_build()
     # Assume sizes are ok when cross compiling, because we are unable to check it
     sz_pfile = cc.sizeof('FILE*', prefix: '#include <stdio.h>')
-    sz_plops = cc.sizeof('struct lintelops*', prefix: '#include "kexec-e2k.c"', args: '-DAS_INCLUDE', include_directories: include_directories('.'))
+    sz_plops = cc.sizeof('struct lintelops*', prefix: '#include "kexec-e2k.c"', args: [ '-DCOMMAND_LINE_SIZE=' + cmdline_length.to_string(), '-DAS_INCLUDE' ], include_directories: include_directories('.'))
     if (sz_pfile == -1) or (sz_plops == -1)
         error('Can not check sizes of FILE* and struct lintelops*.')
     endif

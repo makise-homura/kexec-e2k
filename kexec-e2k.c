@@ -68,6 +68,12 @@ enum xrt_BcdFileTag_t
 enum cancel_reasons_t
 {
     C_SUCCESS = 0,
+    C_NVRAM_OPEN = 3,
+    C_NVRAM_SEEK,
+    C_NVRAM_TELL,
+    C_NVRAM_SIZE,
+    C_NVRAM_READ,
+    C_NVRAM_CLOSE,
     C_FILE_OPEN_IMAGE = 10,
     C_FILE_SEEK = 11,
     C_FILE_TELL,
@@ -171,6 +177,7 @@ struct kexec_info_t
     uint32_t version;
     uint32_t size;
     uint32_t interactive;
+    uint32_t nvram_dump_offset;
     uint32_t boot_disk_pci_addr_node;
     uint32_t boot_disk_pci_addr_bus;
     uint32_t boot_disk_pci_addr_slot;
@@ -180,9 +187,9 @@ struct kexec_info_t
     uint32_t vga_pci_addr_bus;
     uint32_t vga_pci_addr_slot;
     uint32_t vga_pci_addr_func;
-    /* RFU: type_t eth_emul_regime; */
-    /* RFU: type_t eth_enabled_num; */
-    uint32_t reserved[115]; /* total 128 uint32_t's */
+    uint32_t eth_emul_regime;   /* Not used here */
+    uint32_t eth_enabled_num;   /* Not used here */
+    uint32_t reserved[112];     /* total 128 uint32_t's */
 } __attribute__((packed));
 
 struct lintelops
@@ -692,7 +699,7 @@ static void patch_jumper_info(const struct xrt_BcdFile_t super_file)
     cancel(C_SUPER_JUMPER, "Can't find kexec jumper in super file\n");
 }
 
-static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_info_t *target)
+static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_info_t *target, const char *nvram, struct flags_t *flags)
 {
     if (target->signature == 0x61746164)
     {
@@ -710,16 +717,33 @@ static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_in
                 target->vga_pci_addr_bus        = source->vga_pci_addr_bus;
                 target->vga_pci_addr_slot       = source->vga_pci_addr_slot;
                 target->vga_pci_addr_func       = source->vga_pci_addr_func;
+
+                if(!flags->noinitrd)
+                {
+                    target->nvram_dump_offset = 6;
+                    void *nvbuf = ((char *)target) - (512 * target->nvram_dump_offset);
+                    FILE *fn = fopen(nvram, "r");
+                    if (fn == NULL) cancel(C_NVRAM_OPEN, "Can't open NVRAM image %s: %s\n", nvram, strerror(errno));
+                    size_t fns;
+                    if (fseek(fn, 0, SEEK_END) != 0) { fclose(fn); cancel(C_NVRAM_SEEK, "Can't seek NVRAM image: %s\n", strerror(errno)); }
+                    if ((fns = ftell(fn)) == -1) { fclose(fn); cancel(C_NVRAM_TELL, "Can't get NVRAM image position: %s\n", strerror(errno)); }
+                    rewind(fn);
+                    if ((fns <= 0) || (fns > 768)) { fclose(fn); cancel(C_NVRAM_SIZE, "NVRAM image must have size of 1 to 768 bytes.\n"); }
+                    printf("Loading NVRAM image from %s (%lu bytes):\n", nvram, fns);
+                    if (fread(nvbuf, fns, 1, fn) != 1) { fclose(fn); cancel(C_NVRAM_READ, "Can't read %u bytes of NVRAM image, file might be truncated\n", fns); }
+                    printf("Loaded NVRAM image: %lu bytes at address %p (%d sectors before kexec_info at %p)\n", fns, nvbuf, target->nvram_dump_offset, target);
+                    if(fclose(fn)) cancel(C_NVRAM_CLOSE, "Can't close NVRAM image\n");
+                }
                 break;
 
             default:
-                printf("Kexec jumper contains kexec_info structure of unsupported version, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+                printf("Kexec jumper contains kexec_info structure of unsupported version, so NVRAM image, boot disk, VGA card and trusted mode won't be passed to lintel.\n");
         }
     }
-    else printf("Kexec jumper does not contain kexec_info structure, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+    else printf("Kexec jumper does not contain kexec_info structure, so NVRAM image, boot disk, VGA card and trusted mode won't be passed to lintel.\n");
 }
 
-static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHeader_t header, const struct kexec_info_t *kexec_info)
+static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHeader_t header, const struct kexec_info_t *kexec_info, const char *nvram, struct flags_t *flags)
 {
     printf ("File is BCD container (%d files).\n", header.files_num);
 
@@ -743,6 +767,11 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
         {
             super_file.tag = file.tag;
             super_file.size = header.free_lba - super_file.lba;
+            if ((file.size < 7) && !flags->noinitrd)
+            {
+                printf("BCD file contain kexec jumper of less than 3584 bytes (7 sectors), no way to fit NVRAM image.\n");
+                flags->noinitrd = 1;
+            }
             break;
         }
     }
@@ -753,11 +782,11 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
     if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER)
     {
         patch_jumper_info(super_file);
-        inject_kexec_info(kexec_info, (struct kexec_info_t *)(lintel.image + 512 * (super_file.size - 1)));
+        inject_kexec_info(kexec_info, (struct kexec_info_t *)(lintel.image + 512 * (super_file.size - 1)), nvram, flags);
     }
     else
     {
-        printf("BCD file does not contain kexec jumper, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
+        printf("BCD file does not contain kexec jumper, so NVRAM image, boot disk, VGA card and trusted mode won't be passed to lintel.\n");
     }
 }
 
@@ -945,14 +974,14 @@ static void load_image(const char *fname, const char *initrd, const char *cmdlin
         }
         else
         {
-            printf ("File seems to be raw lintel image, so boot disk, VGA card and trusted mode won't be passed.\n");
+            printf ("File seems to be raw lintel image, so NVRAM image, boot disk, VGA card and trusted mode won't be passed.\n");
             read_image(&l, f, realsize, &lintel.image, &lintel.image_size, "lintel");
         }
     }
     else
     {
         flags->iskernel = 0;
-        load_bcd_lintel(&l, f, header, kexec_info);
+        load_bcd_lintel(&l, f, header, kexec_info, initrd, flags);
     }
 }
 
@@ -1006,6 +1035,7 @@ static void usage(const char *argv0, const char *def)
     printf("When starting lintel image:\n");
     printf("        -l:           Treat non-BCD file as a lintel starter, not kernel image\n");
     printf("        -d DEVNAME:   Avoid asking for boot drive and boot guest OS from DEVNAME (e.g. /dev/sdc) by default\n");
+    printf("        -N FILE:      Use FILE as NVRAM image (if not specified, lintel will read actual NVRAM)\n");
     printf("        -T:           Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if -d is given)\n");
     printf("        -n:           Don't check that boot disk AHCI controller is on node 0 (has an effect only if -d is given)\n");
     printf("        -v:           Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM\n");
@@ -1014,9 +1044,10 @@ static void usage(const char *argv0, const char *def)
 
 static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags, dev_t *disk, char cmdline[], char initrd[])
 {
+    int is_nvram = 0;
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:d:I:c:a:TnmlirbfvVMPBx");
+        int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:TnmlirbfvVMPBx");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -1098,9 +1129,11 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 strcpy(cmdline, optarg);
                 break;
 
+            case 'N':
+                is_nvram = 1;
             case 'I':
                 flags->noinitrd = 0;
-                if(strlen(optarg) >= PATH_MAX) cancel(C_LINUX_INITRD_LONG, "%s: passed initrd path is longer than %d bytes\n", argv[0], PATH_MAX);
+                if(strlen(optarg) >= PATH_MAX) cancel(C_LINUX_INITRD_LONG, "%s: passed %s path is longer than %d bytes\n", argv[0], (is_nvram ? "NVRAM" : "initrd"), PATH_MAX);
                 strcpy(initrd, optarg);
                 break;
 
