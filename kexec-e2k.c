@@ -32,6 +32,8 @@ const size_t alignment = 4096;
 const uint64_t LINTEL_BCD_SIGNATURE = 0x012345678ABCDEF0ull;
 
 struct lintel_reboot_param lintel __attribute__((aligned(alignment)));
+struct kexec_reboot_param kernel __attribute__((aligned(alignment)));
+char kcmdline[COMMAND_LINE_SIZE];
 
 struct __attribute__((packed)) xrt_BcdHeader_t
 {
@@ -66,8 +68,8 @@ enum xrt_BcdFileTag_t
 enum cancel_reasons_t
 {
     C_SUCCESS = 0,
-    C_FILE_OPEN = 10,
-    C_FILE_SEEK,
+    C_FILE_OPEN_IMAGE = 10,
+    C_FILE_SEEK = 11,
     C_FILE_TELL,
     C_FILE_ALLOC,
     C_FILE_READ,
@@ -92,6 +94,10 @@ enum cancel_reasons_t
     C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
     C_VGA_PCI = 50,
+    C_LINUX_INITRD_LONG = 51,
+    C_LINUX_CMDLINE_LONG,
+    C_LINUX_RESCMDLINE_LONG,
+    C_LINUX_OPEN_INITRD,
     C_IOMMU_ENABLED = 55,
     C_IOMMU_STAT,
     C_FBDEV_OPEN = 60,
@@ -153,9 +159,11 @@ struct flags_t
     int setvideo;
     int askfordisk;
     int chkdisknode;
+    int noinitrd;
+    int cmdline;
+    int iskernel;
 };
-const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
-
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 struct kexec_info_t
 {
@@ -639,20 +647,21 @@ static void check_runlevel(void)
     if (runlevel != 1) cancel(C_RUNLEVEL_WRONG, "You should run this only from runlevel 1, but current runlevel is %d\n", runlevel);
 }
 
-static void free_lintel(void)
+static void free_static(void)
 {
-    free(lintel.image);
+    if (lintel.image) free(lintel.image);
+    if (kernel.image) free(kernel.image);
+    if (kernel.initrd) free(kernel.initrd);
 }
 
-static void read_lintel(struct lintelops *l, FILE *f, size_t realsize)
+static void read_image(struct lintelops *l, FILE *f, size_t realsize, void **out_buf, u64 *out_size, const char *what)
 {
-    lintel.image_size = realsize; /* Note: this should EXACTLY match the lintel binary size, because it is used to calculate jump address (mcstbug#133402 comment 38) */
+    *out_size = realsize; /* Note: this should EXACTLY match the lintel binary size, because it is used to calculate jump address (mcstbug#133402 comment 38) */
     size_t aligned_size = realsize + alignment; aligned_size -= aligned_size % alignment;
-    if (posix_memalign(&lintel.image, alignment, aligned_size)) { l->fclose(f); cancel(C_FILE_ALLOC, "Can't allocate %ld bytes for lintel file of %ld bytes\n", aligned_size, lintel.image_size); }
-    atexit(free_lintel);
-    if (l->fread(lintel.image, lintel.image_size, 1, f) != 1) { l->fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for lintel file, file might be truncated\n", lintel.image_size); }
-    printf("Loaded lintel: %ld bytes at address %p (%ld bytes aligned at 0x%lx), ioctl struct at %p\n", lintel.image_size, lintel.image, aligned_size, alignment, &lintel);
-    if(l->fclose(f)) cancel(C_FILE_CLOSE, "Can't close lintel file\n");
+    if (posix_memalign(out_buf, alignment, aligned_size)) { l->fclose(f); cancel(C_FILE_ALLOC, "Can't allocate %ld bytes for %s file of %ld bytes\n", aligned_size, what, *out_size); }
+    if (l->fread(*out_buf, *out_size, 1, f) != 1) { l->fclose(f); cancel(C_FILE_READ, "Can't read %ld bytes for %s file, file might be truncated\n", *out_size, what); }
+    printf("Loaded %s: %ld bytes at address %p (%ld bytes aligned at 0x%lx)\n", what, *out_size, *out_buf, aligned_size, alignment);
+    if(l->fclose(f)) cancel(C_FILE_CLOSE, "Can't close %s file\n", what);
 }
 
 static struct xrt_BcdHeader_t bcd_check_files(struct lintelops *l, FILE *f)
@@ -740,7 +749,7 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
     if (!super_file.size) { l->fclose(f); cancel(C_BCD_NOTFOUND, "Can't find lintel file in BCD file\n"); }
 
     if (l->fseek(f, 512 * super_file.lba, SEEK_SET) != 0) { l->fclose(f); cancel(C_BCD_SEEK, "Can't seek to start of lintel binary in BCD file: %s\n", strerror(errno)); }
-    read_lintel(l, f, 512 * super_file.size);
+    read_image(l, f, 512 * super_file.size, &lintel.image, &lintel.image_size, "BCD file");
     if (super_file.tag == PRIORITY_TAG_KEXEC_JUMPER)
     {
         patch_jumper_info(super_file);
@@ -750,16 +759,6 @@ static void load_bcd_lintel(struct lintelops *l, FILE *f, const struct xrt_BcdHe
     {
         printf("BCD file does not contain kexec jumper, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
     }
-}
-
-static void load_raw_lintel(struct lintelops *l, FILE *f)
-{
-    size_t realsize;
-    printf ("File seems to be raw lintel image, so boot disk, VGA card and trusted mode won't be passed to lintel.\n");
-    if (l->fseek(f, 0, SEEK_END) != 0) { l->fclose(f); cancel(C_FILE_SEEK, "Can't seek lintel file: %s\n", strerror(errno)); }
-    if ((realsize = l->ftell(f)) == -1) { l->fclose(f); cancel(C_FILE_TELL, "Can't get file position of lintel file: %s\n", strerror(errno)); }
-    l->rewind(f);
-    read_lintel(l, f, realsize);
 }
 
 size_t stdin_fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
@@ -827,7 +826,16 @@ int stdin_fclose(FILE *stream)
     return 0;
 }
 
-static void load_lintel(const char *fname, const struct kexec_info_t *kexec_info)
+size_t get_fsize(struct lintelops *l, FILE *f)
+{
+    size_t r;
+    if (l->fseek(f, 0, SEEK_END) != 0) { l->fclose(f); cancel(C_FILE_SEEK, "Can't seek file: %s\n", strerror(errno)); }
+    if ((r = l->ftell(f)) == -1) { l->fclose(f); cancel(C_FILE_TELL, "Can't get file position: %s\n", strerror(errno)); }
+    l->rewind(f);
+    return r;
+}
+
+static void load_image(const char *fname, const char *initrd, const char *cmdline, struct flags_t *flags, const struct kexec_info_t *kexec_info)
 {
     FILE *f;
     struct lintelops l = { NULL, 0, 0, fread, fseek, ftell, rewind, fclose };
@@ -838,7 +846,7 @@ static void load_lintel(const char *fname, const struct kexec_info_t *kexec_info
             #define GLOB_TILDE 0
         #endif
 
-        printf("Requested lintel path: %s\n", fname);
+        printf("Requested image path: %s\n", fname);
         glob_t globbuf;
         switch(glob(fname, GLOB_ERR | GLOB_TILDE, NULL, &globbuf))
         {
@@ -868,13 +876,13 @@ static void load_lintel(const char *fname, const struct kexec_info_t *kexec_info
         }
 
         f = fopen(globbuf.gl_pathv[0],"r");
-        if (f == NULL) { globfree(&globbuf); cancel(C_FILE_OPEN, "Can't open %s: %s\n", fname, strerror(errno)); }
-        printf("Loading lintel from %s:\n", globbuf.gl_pathv[0]);
+        if (f == NULL) { globfree(&globbuf); cancel(C_FILE_OPEN_IMAGE, "Can't open image file %s: %s\n", fname, strerror(errno)); }
+        printf("Loading image from %s:\n", globbuf.gl_pathv[0]);
         globfree(&globbuf);
     }
     else
     {
-        printf("Piping lintel from standard input\n");
+        printf("Piping image from standard input\n");
         f = (FILE*)&l;
         l.fread = stdin_fread;
         l.fseek = stdin_fseek;
@@ -884,8 +892,68 @@ static void load_lintel(const char *fname, const struct kexec_info_t *kexec_info
     }
 
     struct xrt_BcdHeader_t header = bcd_check_files(&l, f);
-    if (header.files_num == -1) load_raw_lintel(&l, f);
-    else load_bcd_lintel(&l, f, header, kexec_info);
+    if (header.files_num == -1)
+    {
+        size_t realsize = get_fsize(&l, f);
+
+        if(flags->iskernel)
+        {
+            printf ("File seems to be a kernel image.\n");
+            read_image(&l, f, realsize, &kernel.image, &kernel.image_size, "kernel");
+
+            if(flags->noinitrd)
+            {
+                kernel.initrd_size = 0;
+            }
+            else
+            {
+                struct lintelops s = { NULL, 0, 0, fread, fseek, ftell, rewind, fclose };
+                FILE *fi = fopen(initrd,"r");
+                if (fi == NULL) cancel(C_LINUX_OPEN_INITRD, "Can't open initrd file %s: %s\n", initrd, strerror(errno));
+                realsize = get_fsize(&s, fi);
+                printf("Loading initrd from %s:\n", initrd);
+                read_image(&s, fi, realsize, &kernel.initrd, &kernel.initrd_size, "initrd");
+            }
+
+            char *oldcmdline = NULL;
+            if(flags->cmdline != 'c')
+            {
+                read_sysfs("/proc/cmdline", &oldcmdline, NULL);
+                *strchrnul(oldcmdline, '\n') = '\0';
+            }
+            if(((flags->cmdline == 'c') ? strlen(cmdline) : (strlen(oldcmdline) + ((flags->cmdline == 1) ? 0 : (strlen(cmdline) + 1)))) >= COMMAND_LINE_SIZE)
+            {
+                if (oldcmdline) free(oldcmdline);
+                cancel(C_LINUX_RESCMDLINE_LONG, "Command line to pass to kernel is longer than %d bytes\n", COMMAND_LINE_SIZE);
+            }
+
+            switch(flags->cmdline)
+            {
+                case 1:
+                    strcpy(kernel.cmdline, oldcmdline);
+                    break;
+                case 'a':
+                    strcpy(kernel.cmdline, oldcmdline);
+                    strcat(kernel.cmdline, " ");
+                    strcat(kernel.cmdline, cmdline);
+                    break;
+                case 'c':
+                    strcpy(kernel.cmdline, cmdline);
+                    break;
+            }
+            printf("Kernel command line: %s\n", kernel.cmdline);
+        }
+        else
+        {
+            printf ("File seems to be raw lintel image, so boot disk, VGA card and trusted mode won't be passed.\n");
+            read_image(&l, f, realsize, &lintel.image, &lintel.image_size, "lintel");
+        }
+    }
+    else
+    {
+        flags->iskernel = 0;
+        load_bcd_lintel(&l, f, header, kexec_info);
+    }
 }
 
 static int check_syslog(const char *marker)
@@ -907,9 +975,9 @@ static void usage(const char *argv0, const char *def)
 {
     printf("Usage:\n");
     printf("    %s [OPTIONS] [FILE]\n\n", argv0);
-    printf("    FILE:             Lintel file to start (may be a plain lintel starter, BCD image, or a BCD image with kexec jumper)\n");
+    printf("    FILE:             File to start (may be a plain lintel starter or kernel image, lintel BCD image, or a lintel BCD image with kexec jumper)\n");
     printf("                      Wildcards are supported (to prevent shell expansion, put the argument in quotes). Only one file should fit the pattern then.\n");
-    printf("                      If not specified, %s is loaded. Use a single dash to load from standard input\n", def);
+    printf("                      If not specified, %s is loaded. Use a single dash to load a file from standard input\n", def);
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
     #ifndef NO_BRIDGE_RESET
@@ -917,15 +985,11 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     #endif
-    printf("        -d DEVNAME:   Avoid asking for boot drive and boot guest OS from DEVNAME (e.g. /dev/sdc) by default\n");
-    printf("        -T:           Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if -d is given)\n");
-    printf("        -n:           Don't check that boot disk AHCI controller is on node 0 (has an effect only if -d is given)\n");
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
     printf("        -b:           Don't reset current framebuffer device\n");
     printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
-    printf("        -v:           Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM\n");
     printf("        -V:           Don't unbind currently active vtconsole (has no effect if -b is given)\n");
     printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
@@ -934,15 +998,25 @@ static void usage(const char *argv0, const char *def)
     #else
     printf("        -B:           Ignored (this build does never reset PCI bridge associated with PCI Express device implementing current framebuffer)\n");
     #endif
-    printf("        -x:           Don't perform actual kexec_lintel but everything preceeding it\n");
+    printf("        -x:           Don't perform actual kexec or kexec_lintel ioctl but everything preceeding it\n");
+    printf("When starting kernel image:\n");
+    printf("        -I FILE:      Use FILE as initrd image (no initrd image is passed if not specified)\n");
+    printf("        -c CMDLINE:   Pass CMDLINE as new kernel command line (one of currently loaded kernel is passed if neither -c nor -a specified)\n");
+    printf("        -a CMDLINE:   Add CMDLINE to one of currently loaded kernel to produce new kernel command line\n");
+    printf("When starting lintel image:\n");
+    printf("        -l:           Treat non-BCD file as a lintel starter, not kernel image\n");
+    printf("        -d DEVNAME:   Avoid asking for boot drive and boot guest OS from DEVNAME (e.g. /dev/sdc) by default\n");
+    printf("        -T:           Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if -d is given)\n");
+    printf("        -n:           Don't check that boot disk AHCI controller is on node 0 (has an effect only if -d is given)\n");
+    printf("        -v:           Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM\n");
     exit(C_SUCCESS);
 }
 
-static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags, dev_t *disk)
+static const char *check_args(int argc, char * const argv[], const char *def, int *tty, struct flags_t *flags, dev_t *disk, char cmdline[], char initrd[])
 {
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:d:TnmirbfvVMPBx");
+        int opt = getopt(argc, argv, "h-:t:d:I:c:a:TnmlirbfvVMPBx");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -1003,6 +1077,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 flags->kexec = 0;
                 break;
 
+            case 'l':
+                flags->iskernel = 0;
+                break;
+
             case 'd':
                 flags->askfordisk = 0;
                 struct stat st;
@@ -1011,6 +1089,19 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                     cancel(C_OPTARG_WRONG_DISK, "%s: can't stat device %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
                 *disk = st.st_rdev;
+                break;
+
+            case 'c':
+            case 'a':
+                flags->cmdline = opt;
+                if(strlen(optarg) >= COMMAND_LINE_SIZE) cancel(C_LINUX_CMDLINE_LONG, "%s: passed command line is longer than %d bytes\n", argv[0], COMMAND_LINE_SIZE);
+                strcpy(cmdline, optarg);
+                break;
+
+            case 'I':
+                flags->noinitrd = 0;
+                if(strlen(optarg) >= PATH_MAX) cancel(C_LINUX_INITRD_LONG, "%s: passed initrd path is longer than %d bytes\n", argv[0], PATH_MAX);
+                strcpy(initrd, optarg);
                 break;
 
             case '?':
@@ -1032,7 +1123,6 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 {
                     cancel(C_OPTARG_WRONG_TTY, "%s: malformed tty number %s\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
                 }
-
         }
     }
 }
@@ -1070,13 +1160,22 @@ static void check_mountpoints()
 
 int main(int argc, char *argv[])
 {
-
     int tty = -1;
     struct flags_t flags = DEFAULT_FLAGS;
     struct kexec_info_t kexec_info;
     dev_t disk;
     memset(&kexec_info, 0xff, sizeof(kexec_info));
-    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags, &disk);
+    char cmdline[COMMAND_LINE_SIZE];
+    char initrd[PATH_MAX];
+    memset(cmdline, 0, COMMAND_LINE_SIZE);
+    memset(initrd, 0, PATH_MAX);
+    const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags, &disk, cmdline, initrd);
+    lintel.image = NULL;
+    kernel.cmdline = kcmdline;
+    kernel.image = NULL;
+    kernel.initrd = NULL;
+    memset(kcmdline, 0, COMMAND_LINE_SIZE);
+    atexit(free_static);
 
     if (flags.mounts)
     {
@@ -1122,7 +1221,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    load_lintel(fname, &kexec_info);
+    load_image(fname, initrd, cmdline, &flags, &kexec_info);
 
     if (flags.resetfb)
     {
@@ -1142,12 +1241,12 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    printf("Rebooting to lintel...\n");
+    printf("Rebooting to image...\n");
     int kexec_fd = open_kexec();
-    int rv = ioctl(kexec_fd, LINTEL_REBOOT, &lintel);
+    int rv = ioctl(kexec_fd, (flags.iskernel ? KEXEC_REBOOT : LINTEL_REBOOT), (flags.iskernel ? (void*)&kernel : (void*)&lintel));
     int err = errno;
     close(kexec_fd);
-    cancel(C_DEV_IOCTL, "Failure performing ioctl (returned %d) to start lintel: %s\n", rv, strerror(err));
+    cancel(C_DEV_IOCTL, "Failure performing ioctl (returned %d) to start image: %s\n", rv, strerror(err));
 
     if (flags.fsflush)
     {

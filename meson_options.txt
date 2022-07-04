@@ -1,1 +1,4 @@
 option('static', type : 'feature', value : 'disabled', description : 'Build kexec-lintel statically')
+option('use_kernel_hdr', type : 'boolean', value : true, description : 'Use installed kernel headers to determine kernel command line length')
+option('kernel_hdr_dir', type : 'string', value : '', description : 'Where to search for common kernel headers (e.g. /usr/src/linux-headers-5.4.0-3.19-common) if used (empty to get from running kernel)')
+option('cmdline_length', type : 'integer', value : 512, description : 'Set kernel command line length if kernel headers not found or not used')
