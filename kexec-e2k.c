@@ -970,6 +970,7 @@ static void load_image(const char *fname, const char *initrd, const char *cmdlin
                     strcpy(kernel.cmdline, cmdline);
                     break;
             }
+            kernel.cmdline_size = strlen(kernel.cmdline);
             printf("Kernel command line: %s\n", kernel.cmdline);
         }
         else
@@ -1205,6 +1206,7 @@ int main(int argc, char *argv[])
     const char *fname = check_args(argc, argv, "/opt/mcst/lintel/bin/lintel_*.disk", &tty, &flags, &disk, cmdline, initrd);
     lintel.image = NULL;
     kernel.cmdline = kcmdline;
+    kernel.cmdline_size = 0;
     kernel.image = NULL;
     kernel.initrd = NULL;
     memset(kcmdline, 0, COMMAND_LINE_SIZE);
