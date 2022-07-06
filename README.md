@@ -59,7 +59,7 @@ When starting lintel image:
 
 * `-l`: Treat non-BCD file as a lintel starter, not kernel image
 * `-d <DEVNAME>`: Avoid asking for boot drive and boot guest OS from `<DEVNAME>` (e.g. `/dev/sdc`) by default
-* `-N <FILE>`: Use `<FILE>` as NVRAM image (if not specified, lintel will read actual NVRAM). Create it by calling `dd if=/dev/nvram of=<FILE> bs=256 count=3`
+* `-N <FILE>`: Use `<FILE>` as NVRAM image (if not specified, lintel will read actual NVRAM). Create it by calling `dd if=/dev/nvram of=<FILE> bs=256 skip=1 count=3`
 * `-T`: Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if `-d` is given)
 * `-n`: Don't check that boot disk AHCI controller is on node 0 (has an effect only if `-d` is given)
 * `-v`: Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM
