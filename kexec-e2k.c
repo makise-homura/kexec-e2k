@@ -95,6 +95,8 @@ enum cancel_reasons_t
     C_OPTARG_WRONG_DISK,
     C_SUPER_HEADER = 45,
     C_SUPER_JUMPER,
+    C_OPTARG_WRONG_ETHTYPE = 47,
+    C_OPTARG_WRONG_ETHNUM,
     C_VGA_PCI = 50,
     C_LINUX_INITRD_LONG = 51,
     C_LINUX_CMDLINE_LONG,
@@ -167,8 +169,12 @@ struct flags_t
     int noinitrd;
     int cmdline;
     int iskernel;
+    int defethnum;
+    int ethnum;     /* no effect if defethnum != 0 */
+    int defethtype;
+    int ethtype;    /* no effect if defethtype != 0 */
 };
-const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 struct kexec_info_t
 {
@@ -186,8 +192,8 @@ struct kexec_info_t
     uint32_t vga_pci_addr_bus;
     uint32_t vga_pci_addr_slot;
     uint32_t vga_pci_addr_func;
-    uint32_t eth_emul_regime;   /* Not used here */
-    uint32_t eth_enabled_num;   /* Not used here */
+    uint32_t eth_emul_regime;
+    uint32_t eth_enabled_num;
     uint32_t reserved[112];     /* total 128 uint32_t's */
 } __attribute__((packed));
 
@@ -714,6 +720,8 @@ static void inject_kexec_info(const struct kexec_info_t *source, struct kexec_in
                 target->vga_pci_addr_bus        = source->vga_pci_addr_bus;
                 target->vga_pci_addr_slot       = source->vga_pci_addr_slot;
                 target->vga_pci_addr_func       = source->vga_pci_addr_func;
+                target->eth_emul_regime         = source->eth_emul_regime;
+                target->eth_enabled_num         = source->eth_enabled_num;
 
                 if(!flags->noinitrd)
                 {
@@ -1008,6 +1016,8 @@ static void usage(const char *argv0, const char *def)
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
+    printf("        -e N:         Allow only N network adapters\n");
+    printf("        -E TYPE:      Set network adapter type to TYPE (supported types: `Intel', `PCNet', `Elbrus')\n");
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
@@ -1037,7 +1047,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
     int is_nvram = 0;
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:TnmlirbfvVMPBx");
+        int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:e:E:TnmlirbfvVMPBx");
         if(opt == -1)
         {
             return (optind >= argc) ? def : argv[optind];
@@ -1099,6 +1109,27 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 
             case 'l':
                 flags->iskernel = 0;
+                break;
+
+            case 'e':
+                flags->defethnum = 0;
+                errno = 0;
+                flags->ethnum = strtol(optarg, &endp, 0);
+                if (errno || *endp || flags->ethnum < 0)
+                {
+                    cancel(C_OPTARG_WRONG_ETHNUM, "%s: %s is not a correct network adapter count\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
+                }
+                break;
+
+            case 'E':
+                flags->defethtype = 0;
+                if      (!strcmp(optarg, "Intel"))  flags->ethtype = 0;
+                else if (!strcmp(optarg, "PCNet"))  flags->ethtype = 1;
+                else if (!strcmp(optarg, "Elbrus")) flags->ethtype = 2;
+                else
+                {
+                    cancel(C_OPTARG_WRONG_ETHTYPE, "%s: type `%s' is not one of allowed types: `Intel', `PCNet', `Elbrus'\nRun %s --help for usage)\n", argv[0], optarg, argv[0]);
+                }
                 break;
 
             case 'd':
@@ -1213,6 +1244,16 @@ int main(int argc, char *argv[])
     if (flags.runlevel)
     {
         check_runlevel();
+    }
+
+    if (flags.defethtype)
+    {
+        kexec_info.eth_emul_regime = flags.ethtype;
+    }
+
+    if (flags.defethnum)
+    {
+        kexec_info.eth_enabled_num = flags.ethnum;
     }
 
     if (flags.setvideo)

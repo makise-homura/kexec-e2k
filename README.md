@@ -36,7 +36,9 @@ Specify `-` to load a file from standard input.
 Options:
 
 * `-h`, `--help`: Show help and exit
-* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if `-b`, or all two or three of `-M` and `-P` are given)
+* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with `tty<N>` instead of currently active one (has no effect if `-b`, or all two or three of `-M` and `-P` are given)
+* `-e <N>`: Allow only `<N>` network adapters\n");
+* `-E <TYPE>`: Set network adapter type to `<TYPE>` (supported types: `Intel`, `PCNet`, `Elbrus`)
 * `-m`: Don't check for unmounted filesystems and don't mount them
 * `-i`: Don't check that IOMMU is off
 * `-r`: Don't check current runlevel
