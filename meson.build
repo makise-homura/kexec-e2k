@@ -71,12 +71,4 @@ else
     static_arg = []
 endif
 
-libpci_dep = dependency('libpci', required : false, static: static)
-if not libpci_dep.found() or not cc.links('int main(void) {}', dependencies: libpci_dep, args: static_arg)
-    add_global_arguments('-DNO_BRIDGE_RESET', language : 'c')
-    libpci = []
-else
-    libpci = [ libpci_dep ]
-endif
-
-executable('kexec-e2k', 'kexec-e2k.c', dependencies: libpci, link_args: static_arg)
+executable('kexec-e2k', 'kexec-e2k.c', link_args: static_arg)

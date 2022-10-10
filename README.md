@@ -19,7 +19,6 @@ ninja
 ## Build requirements
 
 * `<limits.h>` should have `PATH_MAX` defined.
-* `libpci` should be available to meson to enable bridge reset (but project is still buildable without it, yet you will not be able to reset PCI bridge in this case).
 * Unless `-Duse_kernel_hdr=false` is specified, you should have common kernel headers installed (specifically, `uapi/asm-generic/setup.h` header with `COMMAND_LINE_SIZE` defined).
 
 # Usage
@@ -37,7 +36,7 @@ Specify `-` to load a file from standard input.
 Options:
 
 * `-h`, `--help`: Show help and exit
-* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if `-b`, or all two or three of `-M`, `-P`, and, if supported, `-B` are given)
+* `-t <N>`, `--tty <N>`: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if `-b`, or all two or three of `-M` and `-P` are given)
 * `-m`: Don't check for unmounted filesystems and don't mount them
 * `-i`: Don't check that IOMMU is off
 * `-r`: Don't check current runlevel
@@ -46,7 +45,7 @@ Options:
 * `-V`: Don't unbind currently active vtconsole (has no effect if `-b` is given)
 * `-M`: Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if `-b` is given)
 * `-P`: Don't remove PCI Express device implementing current framebuffer (has no effect if `-b` is given)
-* `-B`: Don't reset PCI bridge associtated with PCI Express device implementing current framebuffer (has no effect if `-b` is given)
+* `-B`: Ignored (for backwards compatibility)
 * `-x`: Don't perform actual kexec_lintel but everything preceeding it
 
 When starting kernel image:
@@ -63,8 +62,6 @@ When starting lintel image:
 * `-T`: Prohibit lintel to react at any keypress to perform a controlled trusted boot (has an effect only if `-d` is given)
 * `-n`: Don't check that boot disk AHCI controller is on node 0 (has an effect only if `-d` is given)
 * `-v`: Don't pass current video adapter id to lintel and make it load on the one it has in NVRAM
-
-Option `-B` is supported only if built with `libpci`; if not, option is silently skipped and binary acts as if it is always enabled.
 
 # Limitations
 

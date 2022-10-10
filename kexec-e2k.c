@@ -23,10 +23,6 @@
 typedef uint64_t u64;
 #include <asm/kexec.h>
 
-#ifndef NO_BRIDGE_RESET
-#include <pci/pci.h>
-#endif
-
 const size_t alignment = 4096;
 
 const uint64_t LINTEL_BCD_SIGNATURE = 0x012345678ABCDEF0ull;
@@ -163,7 +159,6 @@ struct flags_t
     int vtunbind;
     int rmmod;
     int rmpci;
-    int bridgerst;
     int kexec;
     int untrusted;
     int setvideo;
@@ -173,7 +168,7 @@ struct flags_t
     int cmdline;
     int iskernel;
 };
-const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 struct kexec_info_t
 {
@@ -355,7 +350,6 @@ static void parse_pci_id(const char *context, char *pciid, uint32_t *domain, uin
     if (errno || *endp) cancel(C_PCI_FUNC_WRONG, "Malformed func id %s.\n", context);
 }
 
-#ifndef NO_BRIDGE_RESET
 static char *quick_dirname(char *arg)
 {
     int l = strlen(arg);
@@ -367,27 +361,6 @@ static char *quick_dirname(char *arg)
     *parg = '\0';
     return arg;
 }
-
-static void bridge_reset(char *pciid)
-{
-    uint32_t domain, bus, dev, func;
-    parse_pci_id("for the bridge", pciid, &domain, &bus, &dev, &func);
-
-    /* libpci seems to have error handling undocumented; so we skip it here. */
-    struct pci_access *pacc = pci_alloc();
-    pci_init(pacc);
-    struct pci_dev *pdev = pci_get_dev(pacc, domain, bus, dev, func);
-
-    uint32_t bridge_ctl = pci_read_word(pdev, 0x3E);
-    pci_write_word(pdev, 0x3E, bridge_ctl | 0x40);
-    usleep(10000);
-    pci_write_word(pdev, 0x3E, bridge_ctl);
-    usleep(500000);
-
-    pci_free_dev(pdev);
-    pci_cleanup(pacc);
-}
-#endif
 
 static void delete_module(const char *name)
 {
@@ -500,7 +473,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     char pcilnk[PATH_MAX];
     char *pciid;
 
-    if(flags.rmmod || flags.rmpci || flags.bridgerst)
+    if(flags.rmmod || flags.rmpci)
     {
         if (tty < 0)
         {
@@ -583,31 +556,16 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         delete_module(modname);
     }
 
-    char pciabsdev[PATH_MAX];
-    char *pcibridge;
-    if(flags.rmpci || flags.bridgerst)
+    if(flags.rmpci)
     {
-        /* We should determine bridge path before removing device */
+        char pciabsdev[PATH_MAX];
+        char *pcibridge;
         char pcidev[PATH_MAX];
         path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
         path_readlink(pcidev, pciabsdev);
         pcibridge = quick_basename(quick_dirname(pciabsdev));
         printf("Active video device parent PCI bridge is %s.\n", pcibridge);
-    }
-
-    if(flags.rmpci)
-    {
         reset_devices(pcibridge);
-    }
-
-    if(flags.bridgerst)
-    {
-        #ifdef NO_BRIDGE_RESET
-            printf("Bridge reset of %s is requested, but not supported.\n", pcibridge);
-        #else
-            printf("Performing bridge reset of %s.\n", pcibridge);
-            bridge_reset(pcibridge);
-        #endif
     }
 }
 
@@ -1049,11 +1007,7 @@ static void usage(const char *argv0, const char *def)
     printf("                      If not specified, %s is loaded. Use a single dash to load a file from standard input\n", def);
     printf("    OPTIONS:\n");
     printf("        -h | --help:  Show this help and exit\n");
-    #ifndef NO_BRIDGE_RESET
-    printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or all three of -M, -P, and -B are given)\n");
-    #else
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
-    #endif
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Don't check that IOMMU is off\n");
     printf("        -r:           Don't check current runlevel\n");
@@ -1062,11 +1016,7 @@ static void usage(const char *argv0, const char *def)
     printf("        -V:           Don't unbind currently active vtconsole (has no effect if -b is given)\n");
     printf("        -M:           Don't unload module bound to PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
     printf("        -P:           Don't remove PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
-    #ifndef NO_BRIDGE_RESET
-    printf("        -B:           Don't reset PCI bridge associated with PCI Express device implementing current framebuffer (has no effect if -b is given)\n");
-    #else
-    printf("        -B:           Ignored (this build does never reset PCI bridge associated with PCI Express device implementing current framebuffer)\n");
-    #endif
+    printf("        -B:           Ignored (for backwards compatibility)\n");
     printf("        -x:           Don't perform actual kexec or kexec_lintel ioctl but everything preceeding it\n");
     printf("When starting kernel image:\n");
     printf("        -I FILE:      Use FILE as initrd image (no initrd image is passed if not specified)\n");
@@ -1141,7 +1091,6 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 break;
 
             case 'B':
-                flags->bridgerst = 0;
                 break;
 
             case 'x':
