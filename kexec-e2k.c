@@ -97,6 +97,7 @@ enum cancel_reasons_t
     C_SUPER_JUMPER,
     C_OPTARG_WRONG_ETHTYPE = 47,
     C_OPTARG_WRONG_ETHNUM,
+    C_OPTARG_TOOMANY = 49,
     C_VGA_PCI = 50,
     C_LINUX_INITRD_LONG = 51,
     C_LINUX_CMDLINE_LONG,
@@ -1058,7 +1059,9 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
         int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:e:E:TnmlirbfvVMPBx");
         if(opt == -1)
         {
-            return (optind >= argc) ? def : argv[optind];
+            if (optind == argc) return def;
+            if (optind + 1 == argc) return argv[optind];
+            cancel(C_OPTARG_TOOMANY, "%s: specified multiple lintel/kernel paths, only a single one is expected\nRun %s --help for usage)\n", argv[0], argv[0]);
         }
 
         char *endp;
