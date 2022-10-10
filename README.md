@@ -41,7 +41,7 @@ Options:
 * `-e <N>`: Allow only `<N>` network adapters\n");
 * `-E <TYPE>`: Set network adapter type to `<TYPE>` (supported types: `Intel`, `PCNet`, `Elbrus`)
 * `-m`: Don't check for unmounted filesystems and don't mount them
-* `-i`: Don't check that IOMMU is off
+* `-i`: Ignored (for backwards compatibility)
 * `-r`: Don't check current runlevel
 * `-b`: Don't reset current framebuffer device
 * `-f`: Don't sync, flush, and remount-read-only filesystems
@@ -69,7 +69,7 @@ When starting lintel image:
 # Limitations
 
 * You should be in runlevel 1 to run this (but you can disable this check by `-r`).
-* You should have IOMMU disabled (but you can disable this check by `-i`; it is useful for modern kernels which are usually start normally with IOMMU enabled).
+* You may consider having IOMMU disabled in case of loading outdated lintel images. As long as you use modern kernel or lintel image, this is not required (and no check for IOMMU performed, as in earlier versions of this tool).
 * If booting lintel, you should have the same lintel BCD image written on some disk (unless supplied image contains kexec jumper).
 * If booting lintel, no other disks should contain lintel except one mentioned above (unless supplied image contains kexec jumper).
 * If booting lintel, all its hadrware limitations (e.g. SATA controller 0, etc.) apply.

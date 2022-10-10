@@ -103,8 +103,6 @@ enum cancel_reasons_t
     C_LINUX_CMDLINE_LONG,
     C_LINUX_RESCMDLINE_LONG,
     C_LINUX_OPEN_INITRD,
-    C_IOMMU_ENABLED = 55,
-    C_IOMMU_STAT,
     C_FBDEV_OPEN = 60,
     C_FBDEV_IOCTL,
     C_FBDEV_CLOSE,
@@ -155,7 +153,6 @@ enum cancel_reasons_t
 struct flags_t
 {
     int mounts;
-    int iommu;
     int runlevel;
     int resetfb;
     int fsflush;
@@ -175,7 +172,7 @@ struct flags_t
     int defethtype;
     int ethtype;    /* no effect if defethtype != 0 */
 };
-const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 struct kexec_info_t
 {
@@ -607,14 +604,6 @@ static void fill_disk_data(struct kexec_info_t *kexec_info, dev_t dev, int chkdi
     printf("Requested boot from AHCI controller %04x:%02x:%02x.%x, port %d.\n", kexec_info->boot_disk_pci_addr_node, kexec_info->boot_disk_pci_addr_bus, kexec_info->boot_disk_pci_addr_slot, kexec_info->boot_disk_pci_addr_func, kexec_info->boot_disk_sata_port);
 }
 
-static void check_iommu(void)
-{
-    /* Current kernels don't allow lintel to detect devices if IOMMU is enabled. */
-    struct stat st;
-    if (stat("/sys/class/iommu", &st) != 0) cancel(C_IOMMU_STAT, "Can't stat() /sys/class/iommu directory (probably you have very old kernel): %s\n", strerror(errno));
-    if (lstat("/sys/class/iommu/iommu0", &st) == 0) cancel(C_IOMMU_ENABLED, "IOMMU is enabled, and current kernels don't support kexec to lintel in this case. Reboot with iommu=0 kernel parameter\n");
-}
-
 static void check_runlevel(void)
 {
     /* For the sake of not rebooting fully running system, restrict to runlevel 1 only. We suppose nothing that may leave garbage in filesystem is running there. */
@@ -1028,7 +1017,7 @@ static void usage(const char *argv0, const char *def)
     printf("        -e N:         Allow only N network adapters\n");
     printf("        -E TYPE:      Set network adapter type to TYPE (supported types: `Intel', `PCNet', `Elbrus')\n");
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
-    printf("        -i:           Don't check that IOMMU is off\n");
+    printf("        -i:           Ignored (for backwards compatibility)\n");
     printf("        -r:           Don't check current runlevel\n");
     printf("        -b:           Don't reset current framebuffer device\n");
     printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
@@ -1080,7 +1069,6 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
                 break;
 
             case 'i':
-                flags->iommu = 0;
                 break;
 
             case 'r':
@@ -1246,11 +1234,6 @@ int main(int argc, char *argv[])
     if (flags.mounts)
     {
         check_mountpoints();
-    }
-
-    if (flags.iommu)
-    {
-        check_iommu();
     }
 
     if (flags.runlevel)
