@@ -1006,6 +1006,13 @@ static void remount_filesystems()
     while(!check_syslog("Emergency Remount complete\n"));
 }
 
+extern const char *vcs_ver;
+static void version(const char *argv0)
+{
+    printf("%s (kexec-e2k) version %s, git revision %s\n", argv0, PROJ_VER, vcs_ver);
+    exit(C_SUCCESS);
+}
+
 static void usage(const char *argv0, const char *def)
 {
     printf("Usage:\n");
@@ -1014,6 +1021,7 @@ static void usage(const char *argv0, const char *def)
     printf("                      Wildcards are supported (to prevent shell expansion, put the argument in quotes). Only one file should fit the pattern then.\n");
     printf("                      If not specified, %s is loaded. Use a single dash to load a file from standard input\n", def);
     printf("    OPTIONS:\n");
+    printf("        --version:    Show version and exit\n");
     printf("        -h | --help:  Show this help and exit\n");
     printf("        -t | --tty N: Reset framebuffer device associated with ttyN instead of currently active one (has no effect if -b, or both -M and -P are given)\n");
     printf("        -e N:         Allow only N network adapters\n");
@@ -1165,6 +1173,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 
             case '-':
                 if(!strcmp(optarg, "help")) usage(argv[0], def);
+                if(!strcmp(optarg, "version")) version(argv[0]);
                 if(strcmp(optarg, "tty")) cancel(C_OPTARG_LONG, "%s: incorrect long option -- '%s'\nRun %s --help for usage\n", argv[0], optarg, argv[0]);
                 if(optind >= argc) cancel(C_OPTARG, "%s: option requires an argument -- '--tty'\nRun %s --help for usage\n", argv[0], argv[0]);
                 optarg = argv[optind++];

@@ -35,6 +35,7 @@ Specify `-` to load a file from standard input.
 
 Options:
 
+* `--version`: Show version and exit
 * `-h`, `--help`: Show help and exit
 * `-t <N>`, `--tty <N>`: Reset framebuffer device associated with `tty<N>` instead of currently active one (has no effect if `-b`, or all two or three of `-M` and `-P` are given)
 * `-e <N>`: Allow only `<N>` network adapters\n");

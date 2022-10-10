@@ -1,4 +1,6 @@
-project('kexec-e2k', 'c', meson_version: '>=0.53.0')
+project('kexec-e2k', 'c', version: '1.0', meson_version: '>=0.53.0')
+add_global_arguments('-DPROJ_VER="' + meson.project_version() + '"', language : 'c')
+
 cc = meson.get_compiler('c')
 cc.has_header_symbol('limits.h', 'PATH_MAX', required : true)
 
@@ -71,4 +73,6 @@ else
     static_arg = []
 endif
 
-executable('kexec-e2k', 'kexec-e2k.c', link_args: static_arg)
+version_src = vcs_tag(input: 'version.c.in', output: 'version.c', fallback: '(unknown)')
+
+executable('kexec-e2k', 'kexec-e2k.c', version_src, link_args: static_arg)
