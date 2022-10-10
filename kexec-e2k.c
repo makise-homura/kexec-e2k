@@ -144,6 +144,10 @@ enum cancel_reasons_t
     C_GLOB_ABORT,
     C_GLOB_NONE,
     C_GLOB_UNEXPECTED,
+    C_BRGLOB_SYSFS = 115,
+    C_BRGLOB_ALLOC,
+    C_BRGLOB_ABORT,
+    C_BRGLOB_UNEXPECTED,
     C_FBGLOB_ALLOC = 120,
     C_FBGLOB_ABORT,
     C_FBGLOB_UNEXPECTED
@@ -452,6 +456,43 @@ static void unbind_vtcon(const char *signature)
     write_sysfs(bind, "0\n");
 }
 
+static void reset_devices(const char *bridgeid)
+{
+    char devpattern[PATH_MAX];
+    path_snprintf(devpattern, "PCI bridge subdevice pattern", "/sys/bus/pci/devices/%s/????:??:??.*", bridgeid);
+        
+    glob_t globbuf;
+    switch(glob(devpattern, GLOB_ERR, NULL, &globbuf))
+    {
+        case 0:
+            break;
+
+        case GLOB_NOMATCH:
+            globfree(&globbuf);
+            cancel(C_BRGLOB_SYSFS, "No bridge subdevices sysfs subdirectory exist; something is completely wrong with your sysfs.\n");
+
+        case GLOB_NOSPACE:
+            globfree(&globbuf);
+            cancel(C_BRGLOB_ALLOC, "No memory looking for bridge subdevices\n");
+
+        case GLOB_ABORTED:
+            globfree(&globbuf);
+            cancel(C_BRGLOB_ABORT, "Read error looking for bridge subdevices\n");
+
+        default:
+            globfree(&globbuf);
+            cancel(C_BRGLOB_UNEXPECTED, "Unexpected error looking for bridge subdevices, internal result: %s\n", strerror(errno));
+    }
+
+    for(size_t n = 0; n < globbuf.gl_pathc; ++n)
+    {
+        char pciremove[PATH_MAX];
+        path_snprintf(pciremove, "PCI device removal command pseudofile", "%s/remove", globbuf.gl_pathv[n]);
+        printf("Removing PCI device %s.\n", globbuf.gl_pathv[n]);
+        write_sysfs(pciremove, "1\n");
+    }
+}
+
 static void reset_fbdriver(int tty, const struct flags_t flags)
 {
     /* Current kernels require specific adapter reset sequence to be performed before kexec. */
@@ -492,7 +533,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
 
             case GLOB_NOSPACE:
                 globfree(&globbuf);
-                cancel(C_FBGLOB_ALLOC, "No memory looking for framebuffers %s\n");
+                cancel(C_FBGLOB_ALLOC, "No memory looking for framebuffers\n");
 
             case GLOB_ABORTED:
                 globfree(&globbuf);
@@ -542,34 +583,32 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         delete_module(modname);
     }
 
-    #ifndef NO_BRIDGE_RESET
-    /* We should determine bridge path before removing device */
     char pciabsdev[PATH_MAX];
     char *pcibridge;
-    if(flags.bridgerst)
+    if(flags.rmpci || flags.bridgerst)
     {
+        /* We should determine bridge path before removing device */
         char pcidev[PATH_MAX];
         path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
         path_readlink(pcidev, pciabsdev);
         pcibridge = quick_basename(quick_dirname(pciabsdev));
+        printf("Active video device parent PCI bridge is %s.\n", pcibridge);
     }
-    #endif
 
     if(flags.rmpci)
     {
-        char pciremove[PATH_MAX];
-        path_snprintf(pciremove, "PCI device removal command pseudofile", "/sys/bus/pci/devices/%s/remove", pciid);
-        printf("Removing PCI device %s.\n", pciid);
-        write_sysfs(pciremove, "1\n");
+        reset_devices(pcibridge);
     }
 
-    #ifndef NO_BRIDGE_RESET
     if(flags.bridgerst)
     {
-        printf("Performing bridge reset of %s.\n", pcibridge);
-        bridge_reset(pcibridge);
+        #ifdef NO_BRIDGE_RESET
+            printf("Bridge reset of %s is requested, but not supported.\n", pcibridge);
+        #else
+            printf("Performing bridge reset of %s.\n", pcibridge);
+            bridge_reset(pcibridge);
+        #endif
     }
-    #endif
 }
 
 static void fill_disk_data(struct kexec_info_t *kexec_info, dev_t dev, int chkdisknode)
