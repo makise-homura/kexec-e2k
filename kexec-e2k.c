@@ -1241,12 +1241,12 @@ int main(int argc, char *argv[])
         check_runlevel();
     }
 
-    if (flags.defethtype)
+    if (!flags.defethtype)
     {
         kexec_info.eth_emul_regime = flags.ethtype;
     }
 
-    if (flags.defethnum)
+    if (!flags.defethnum)
     {
         kexec_info.eth_enabled_num = flags.ethnum;
     }
