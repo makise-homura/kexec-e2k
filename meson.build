@@ -1,4 +1,4 @@
-project('kexec-e2k', 'c', version: '1.0', meson_version: '>=0.53.0')
+project('kexec-e2k', 'c', version: '1.0.1', meson_version: '>=0.53.0')
 add_global_arguments('-DPROJ_VER="' + meson.project_version() + '"', language : 'c')
 
 cc = meson.get_compiler('c')
