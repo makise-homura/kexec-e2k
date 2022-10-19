@@ -45,6 +45,7 @@ Options:
 * `-m`: Don't check for unmounted filesystems and don't mount them
 * `-i`: Ignored (for backwards compatibility)
 * `-r`: Don't check current runlevel
+* `-X`: Don't check if X is started
 * `-b`: Don't reset current framebuffer device
 * `-f`: Don't sync, flush, and remount-read-only filesystems
 * `-V`: Don't unbind currently active vtconsole (has no effect if `-b` is given)
@@ -71,6 +72,7 @@ When starting lintel image:
 # Limitations
 
 * You should be in runlevel 1 to run this (but you can disable this check by `-r`).
+* You should not be running X, it may interfere with framebuffer usage (but you can disable this check by `-X`).
 * You may consider having IOMMU disabled in case of loading outdated lintel images. As long as you use modern kernel or lintel image, this is not required (and no check for IOMMU performed, as in earlier versions of this tool).
 * If booting lintel, you should have the same lintel BCD image written on some disk (unless supplied image contains kexec jumper).
 * If booting lintel, no other disks should contain lintel except one mentioned above (unless supplied image contains kexec jumper).

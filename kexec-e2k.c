@@ -83,6 +83,7 @@ enum cancel_reasons_t
     C_RUNLEVEL_NONE = 25,
     C_RUNLEVEL_WRONG,
     C_RUNLEVEL_FAIL,
+    C_X_RUNNING = 28,
     C_BCD_HEADER = 30,
     C_BCD_FILEHEADER,
     C_BCD_ORDER,
@@ -147,13 +148,18 @@ enum cancel_reasons_t
     C_BRGLOB_UNEXPECTED,
     C_FBGLOB_ALLOC = 120,
     C_FBGLOB_ABORT,
-    C_FBGLOB_UNEXPECTED
+    C_FBGLOB_UNEXPECTED,
+    C_XGLOB_ALLOC = 123,
+    C_XGLOB_ABORT,
+    C_XGLOB_NONE,
+    C_XGLOB_UNEXPECTED
 };
 
 struct flags_t
 {
     int mounts;
     int runlevel;
+    int xorg;
     int resetfb;
     int fsflush;
     int vtunbind;
@@ -172,7 +178,7 @@ struct flags_t
     int defethtype;
     int ethtype;    /* no effect if defethtype != 0 */
 };
-const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+const struct flags_t DEFAULT_FLAGS = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 struct kexec_info_t
 {
@@ -268,11 +274,23 @@ static void path_snprintf(char *buf, const char *name, const char *fmt, ...)
     if(sz >= PATH_MAX) cancel(C_PATH_LONG, "Path to %s is greater than %d bytes", name, PATH_MAX - 1);
 }
 
-static void path_readlink(const char *link, char *buf)
+static void path_readlink(const char *link, char *buf, int nocancel)
 {
     ssize_t ls = readlink(link, buf, PATH_MAX);
-    if (ls == -1) cancel(C_LINK_READ, "Can't read symbolic link %s: %s\n", link, strerror(errno));
+    if (ls == -1)
+    {
+        if(nocancel)
+        {
+            buf[0] = '\0';
+            return;
+        }
+        else
+        {
+            cancel(C_LINK_READ, "Can't read symbolic link %s: %s\n", link, strerror(errno));
+        }
+    }
     if (ls == PATH_MAX) cancel(C_LINK_LONG, "Path linked by %s is greater than %d bytes", link, PATH_MAX - 1);
+    buf[ls] = '\0';
 }
 
 static void read_sysfs(const char *file, char **buf, DIR *dir)
@@ -538,7 +556,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
 
         char fbdev[PATH_MAX];
         path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
-        path_readlink(fbdev, pcilnk);
+        path_readlink(fbdev, pcilnk, 0);
         pciid = quick_basename(pcilnk);
 
         if (!strncmp(pciid, "vga16fb", 7))
@@ -552,7 +570,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     {
         char driverlnk[PATH_MAX];
         path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
-        path_readlink(driverlnk, drivermod);
+        path_readlink(driverlnk, drivermod, 0);
         modname = quick_basename(drivermod);
     }
 
@@ -560,7 +578,7 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     {
         char pcidev[PATH_MAX];
         path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
-        path_readlink(pcidev, pciabsdev);
+        path_readlink(pcidev, pciabsdev, 0);
         pcibridge = quick_basename(quick_dirname(pciabsdev));
         printf("Active video device parent PCI bridge is %s.\n", pcibridge);
     }
@@ -587,7 +605,7 @@ static void fill_disk_data(struct kexec_info_t *kexec_info, dev_t dev, int chkdi
     char blklink[PATH_MAX];
     char blkabsdev[PATH_MAX];
     path_snprintf(blklink, "Block device sysfs link", "/sys/dev/block/%d:%d", major(dev), minor(dev));
-    path_readlink(blklink, blkabsdev);
+    path_readlink(blklink, blkabsdev, 0);
     char *ataport = strstr(blkabsdev, "/ata");
     if (ataport == NULL) cancel(C_DISKDEV_NONATA, "Device %s is not an ATA device.\n", blklink);
     *ataport++ = '\0';
@@ -1028,6 +1046,7 @@ static void usage(const char *argv0, const char *def)
     printf("        -m:           Don't check for unmounted filesystems and don't mount them\n");
     printf("        -i:           Ignored (for backwards compatibility)\n");
     printf("        -r:           Don't check current runlevel\n");
+    printf("        -X:           Don't check if X is started\n");
     printf("        -b:           Don't reset current framebuffer device\n");
     printf("        -f:           Don't sync, flush, and remount-read-only filesystems\n");
     printf("        -V:           Don't unbind currently active vtconsole (has no effect if -b is given)\n");
@@ -1054,7 +1073,7 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
     int is_nvram = 0;
     for(;;)
     {
-        int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:e:E:TnmlirbfvVMPBx");
+        int opt = getopt(argc, argv, "h-:t:d:I:N:c:a:e:E:TnmlirbfvVMPBXx");
         if(opt == -1)
         {
             if (optind == argc) return def;
@@ -1113,6 +1132,10 @@ static const char *check_args(int argc, char * const argv[], const char *def, in
 
             case 'x':
                 flags->kexec = 0;
+                break;
+
+            case 'X':
+                flags->xorg = 0;
                 break;
 
             case 'l':
@@ -1220,6 +1243,40 @@ static void check_mountpoints()
     if (dev_root == dev_proc) try_mount("proc", "/proc");
 }
 
+static void check_xorg()
+{
+    glob_t globbuf;
+    switch(glob("/proc/[0-9]*/exe", GLOB_ERR, NULL, &globbuf))
+    {
+        case 0:
+            break;
+
+        case GLOB_NOMATCH:
+            globfree(&globbuf);
+            cancel(C_XGLOB_NONE, "Something is wrong with your /proc; probably it does't export `exe' symlink in process directory.\n");
+
+        case GLOB_NOSPACE:
+            globfree(&globbuf);
+            cancel(C_XGLOB_ALLOC, "No memory looking for running processes\n");
+
+        case GLOB_ABORTED:
+            globfree(&globbuf);
+            cancel(C_XGLOB_ABORT, "Read error looking for running processes\n");
+
+        default:
+            globfree(&globbuf);
+            cancel(C_XGLOB_UNEXPECTED, "Unexpected error looking for running processes, internal result: %s\n", strerror(errno));
+    }
+
+    for(int i = 0; i < globbuf.gl_pathc; ++i)
+    {
+        char lnk[PATH_MAX];
+        path_readlink(globbuf.gl_pathv[i], lnk, 1);
+        char *exe = quick_basename(lnk);
+        if (exe && *exe == 'X') cancel(C_X_RUNNING, "Possible X process is detected: %s == %s. Kill this process or use -X to skip this check.\n", globbuf.gl_pathv[i], lnk);
+    }
+}
+
 int main(int argc, char *argv[])
 {
     int tty = -1;
@@ -1248,6 +1305,11 @@ int main(int argc, char *argv[])
     if (flags.runlevel)
     {
         check_runlevel();
+    }
+
+    if (flags.xorg)
+    {
+        check_xorg();
     }
 
     if (!flags.defethtype)
