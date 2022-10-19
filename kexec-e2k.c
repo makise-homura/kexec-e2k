@@ -476,6 +476,10 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
 
     char pcilnk[PATH_MAX];
     char *pciid;
+    char drivermod[PATH_MAX];
+    char *modname;
+    char pciabsdev[PATH_MAX];
+    char *pcibridge;
     int fb;
 
     if(flags.rmmod || flags.rmpci || flags.vtunbind)
@@ -544,37 +548,41 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         }
     }
 
+    if(flags.rmmod)
+    {
+        char driverlnk[PATH_MAX];
+        path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
+        path_readlink(driverlnk, drivermod);
+        modname = quick_basename(drivermod);
+    }
+
+    if(flags.rmpci)
+    {
+        char pcidev[PATH_MAX];
+        path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
+        path_readlink(pcidev, pciabsdev);
+        pcibridge = quick_basename(quick_dirname(pciabsdev));
+        printf("Active video device parent PCI bridge is %s.\n", pcibridge);
+    }
+
     if(flags.vtunbind)
     {
         unbind_vtcon("frame buffer device");
 
         char fbremove[PATH_MAX];
         path_snprintf(fbremove, "Framebuffer device remove link", "/sys/class/graphics/fb%d/device/remove", fb);
-        printf("Removing framebuffer device fb%d.", fb);
+        printf("Removing framebuffer device fb%d.\n", fb);
         write_sysfs(fbremove, "1\n");
     }
 
     if(flags.rmmod)
     {
-        char driverlnk[PATH_MAX];
-        char drivermod[PATH_MAX];
-        char *modname;
-        path_snprintf(driverlnk, "PCI device driver symlink", "/sys/bus/pci/devices/%s/driver", pciid);
-        path_readlink(driverlnk, drivermod);
-        modname = quick_basename(drivermod);
         printf("Unloading module %s.\n", modname);
         delete_module(modname);
     }
 
     if(flags.rmpci)
     {
-        char pciabsdev[PATH_MAX];
-        char *pcibridge;
-        char pcidev[PATH_MAX];
-        path_snprintf(pcidev, "PCI device instance directory", "/sys/bus/pci/devices/%s", pciid);
-        path_readlink(pcidev, pciabsdev);
-        pcibridge = quick_basename(quick_dirname(pciabsdev));
-        printf("Active video device parent PCI bridge is %s.\n", pcibridge);
         reset_devices(pcibridge);
     }
 }
