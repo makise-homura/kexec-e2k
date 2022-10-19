@@ -75,4 +75,4 @@ endif
 
 version_src = vcs_tag(input: 'version.c.in', output: 'version.c', fallback: '(unknown)')
 
-executable('kexec-e2k', 'kexec-e2k.c', version_src, link_args: static_arg)
+executable('kexec-e2k', 'kexec-e2k.c', version_src, install: true, link_args: static_arg)

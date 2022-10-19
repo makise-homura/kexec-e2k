@@ -6,10 +6,12 @@
 meson build
 cd build
 ninja
+ninja install
 ```
 
 ## Options
 
+* You may specify `-Dprefix=<PREFIX>` to override default install prefix.
 * You may specify `-Dstatic=enabled` if you wish to build static binary.
 * You may set `-Duse_kernel_hdr=false` if you don't want to use installed kernel headers to determine kernel command line length.
 * You may specify path to kernel headers include directory by an option like `-Dkernel_hdr_dir=/usr/src/linux-headers-5.4.0-3.19-common/include`, if you have an alternative path for common kernel headers. Has no effect if `-Duse_kernel_hdr=false` is specified. Otherwise, it is mandatory while cross building.
