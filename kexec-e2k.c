@@ -476,8 +476,9 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
 
     char pcilnk[PATH_MAX];
     char *pciid;
+    int fb;
 
-    if(flags.rmmod || flags.rmpci)
+    if(flags.rmmod || flags.rmpci || flags.vtunbind)
     {
         if (tty < 0)
         {
@@ -522,14 +523,14 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
         }
 
         printf("Detecting active framebuffer device for tty%d by %s...\n", tty, globbuf.gl_pathv[0]);
-        int fb = con2fbmap(tty, &globbuf);
+        fb = con2fbmap(tty, &globbuf);
 
         if (fb == -1)
         {
             printf("No console is mapped to frame buffer device; you might have no video adapter, or use VGA console instead of framebuffer one.\n");
             return;
         }
-        printf("Active framebuffer device is %d.\n", fb);
+        printf("Active framebuffer device is fb%d.\n", fb);
 
         char fbdev[PATH_MAX];
         path_snprintf(fbdev, "PCI device link", "/sys/class/graphics/fb%d/device", fb);
@@ -546,6 +547,11 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     if(flags.vtunbind)
     {
         unbind_vtcon("frame buffer device");
+
+        char fbremove[PATH_MAX];
+        path_snprintf(fbremove, "Framebuffer device remove link", "/sys/class/graphics/fb%d/device/remove", fb);
+        printf("Removing framebuffer device fb%d.", fb);
+        write_sysfs(fbremove, "1\n");
     }
 
     if(flags.rmmod)
