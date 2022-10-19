@@ -568,22 +568,17 @@ static void reset_fbdriver(int tty, const struct flags_t flags)
     if(flags.vtunbind)
     {
         unbind_vtcon("frame buffer device");
+    }
 
-        char fbremove[PATH_MAX];
-        path_snprintf(fbremove, "Framebuffer device remove link", "/sys/class/graphics/fb%d/device/remove", fb);
-        printf("Removing framebuffer device fb%d.\n", fb);
-        write_sysfs(fbremove, "1\n");
+    if(flags.rmpci)
+    {
+        reset_devices(pcibridge);
     }
 
     if(flags.rmmod)
     {
         printf("Unloading module %s.\n", modname);
         delete_module(modname);
-    }
-
-    if(flags.rmpci)
-    {
-        reset_devices(pcibridge);
     }
 }
 
